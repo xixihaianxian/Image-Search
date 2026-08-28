@@ -5,10 +5,11 @@ from torch import nn
 from torchvision import models
 import yaml
 from loguru import logger
-from typing import Optional,Tuple
+from typing import Optional,Tuple,List
 from PIL import Image
+from pathlib import Path
 
-def load_config(config_file:str):
+def load_config(config_file:Optional[str]):
     """登录yaml配置文件
     Args:
         config_file: yaml配置文件的路径
@@ -21,7 +22,26 @@ def load_config(config_file:str):
         return config
     except Exception as error:
         logger.error(f"Failed to get configuration!")
-        raise None
+        raise FileNotFoundError(f"Failed to get configuration!") from None
+
+# 获取模型所属设备
+def get_module_device(module:nn.Module):
+    """返回模型所属设备
+    Args:
+        module: 模型
+    Returns:
+        模型所属设备，空模块返回cpu
+    """
+    try:
+        device=next(module.parameters()).device
+        return device
+    except StopIteration:
+        try:
+            device=next(module.buffers()).device
+            return device
+        except StopIteration:
+            logger.warning(f"The module is empty!")
+            return torch.device("cpu")
 
 # 构造特征获取函数
 class FeatureModule(nn.Module):
@@ -36,7 +56,7 @@ class FeatureModule(nn.Module):
             self.feature_part=base_module.features
         except AttributeError:
             logger.error(f"The model doesn't have a feature extraction part!")
-            raise None
+            raise AttributeError(f"The model doesn't have a feature extraction part!") from None
         # 获取自适应平均池化，仅发出警告
         try:
             self.avgpool=base_module.avgpool
@@ -74,10 +94,14 @@ class Vgg16FeatureExtractor:
         """
         logger.info(f"Loading vgg16 model!")
         if self.weight_path is None:
+            logger.info(f"Online download weights")
             vgg16=models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
+            logger.info(f"Download vgg16 model completed!")
             return vgg16
         logger.info(f"Loading vgg16 model from {self.weight_path}")
         vgg16=models.vgg16(weights=None)
+        # 优化权重路径
+        self.weight_path=Path(__file__).parent.parent.joinpath(self.weight_path).resolve()
         # 从配置文件中获取权重路径
         vgg16_static_dict=torch.load(f=self.weight_path,weights_only=True)
         # 严格匹配
@@ -90,6 +114,20 @@ class Vgg16FeatureExtractor:
         module=FeatureModule(base_module=module)
         module=module.to(device=self.device)
         return module
+    # 将数据转化为tensor张量
+    def to_tensor(self,data:Optional[torch.Tensor]):
+        if isinstance(data,torch.Tensor):
+            pass
+        elif isinstance(data,np.ndarray):
+            data=torch.from_numpy(data)
+        elif isinstance(data,Image.Image):
+            data=np.array(data)
+            data=torch.from_numpy(data)
+        else:
+            logger.error(f"The data type is not supported!")
+            raise TypeError(f"The data type is not supported!") from None
+        data=data.to(device=self.device)
+        return data
     def image_to_array(self,image_path:str,shape:Tuple[int,int]=(224,224))->torch.Tensor:
         image = Image.open(fp=image_path)
         image=image.resize(size=shape)
@@ -103,12 +141,36 @@ class Vgg16FeatureExtractor:
         # 转化图片数据类型
         image=image.to(dtype=torch.float32,device=self.device)
         return image
-    def extract_feature(self,image:torch.Tensor):
-        pass
+    def extract_feature(self,module:nn.Module,image:torch.Tensor):
+        """
+        Args:
+            module: 特征提取模型
+            image: 图片tensor张量,shape=(batch_size,channels,height,width)
+        Returns:
+            特征张量，shape=(batch_size,512)
+        """
+        # 将模型转化到测试模式
+        module.eval()
+        # image数据转化，防止出错
+        image=self.to_tensor(image)
+        # 数据维度错误
+        if image.dim() != 4:
+            logger.error(f"The image shape is mistake!")
+            raise Exception(f"The image shape is mistake!") from None
+        # 获取模型所属的设备
+        module_device=get_module_device(module)
+        # 再次统一设备
+        if image.device != module_device:
+            image = image.to(device=self.device)
+            module = module.to(device=self.device)
+        # 获取图片特征
+        feature = module(image)
+        return feature
 
 if __name__=="__main__":
-    vgg16_feature_extract=Vgg16FeatureExtractor(config_path="./config.yml")
-    vgg16=models.vgg16(weights=None)
-    feature=vgg16_feature_extract.feature_fetch_module(vgg16)
-    img=vgg16_feature_extract.image_to_array(image_path="./ciocan.jpg")
-    print(feature(img).shape)
+    vgg16_feature_extract=Vgg16FeatureExtractor(config_path="./config/config.yml")
+    vgg16=vgg16_feature_extract.load_vgg16()
+    feature_module=vgg16_feature_extract.feature_fetch_module(vgg16)
+    image=vgg16_feature_extract.image_to_array(image_path="./static/ciocan.jpg")
+    image_feature=vgg16_feature_extract.extract_feature(feature_module,image)
+    print(image_feature.shape)

@@ -1,0 +1,5 @@
+# 权重路径
+weight_path: module/vgg16-397923af.pth
+
+# 设备
+device: cuda
