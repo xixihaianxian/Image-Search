@@ -1,0 +1,65 @@
+/* 全局基础样式：清新浅色简约 */
+:root {
+  color-scheme: light;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    'Noto Sans SC',
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  /* 主题色 */
+  --color-text: #1e293b;
+  --color-text-secondary: #64748b;
+  --color-text-muted: #94a3b8;
+  --color-bg-start: #fafbff;
+  --color-bg-end: #eef2ff;
+  --color-card: #ffffff;
+  --color-border: #e2e8f0;
+  --color-accent: #6366f1;
+  --color-accent-light: #a5b4fc;
+  --color-sky: #38bdf8;
+  --color-rose: #f9a8d4;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  min-height: 100vh;
+}
+
+body {
+  background: linear-gradient(160deg, var(--color-bg-start) 0%, #f1f5fd 55%, var(--color-bg-end) 100%);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -3,3 +3,11 @@ weight_path: module/vgg16-397923af.pth
 
 # 设备
 device: cuda
+
+# 图片格式
+image_extensions:
+  - .jpg
+  - .png
+  - .jpeg
+  - .bmp
+  - .webp
