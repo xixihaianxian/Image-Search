@@ -48,13 +48,15 @@ export function resolveImageUrl(imageUrl) {
 /**
  * 批量上传图片文件到后端图库
  * @param {File[]} files 图片文件列表
+ * @param {string} folder 目录名（后端据此存到 upload/<folder>/ 子目录）
  * @param {(progress:number)=>void} [onProgress] 上传进度回调（0~1）
  * @returns {Promise<Array<{name:string, imageUrl:string, thumbnail?:string}>>} 后端登记结果
  */
-export function uploadGallery(files, onProgress) {
+export function uploadGallery(files, folder, onProgress) {
   return new Promise((resolve, reject) => {
     const form = new FormData()
-    // 注意：后端路由签名为 images: List[UploadFile]，字段名必须是 "images"
+    // 后端路由签名：folder 是表单字段，images 是表单文件字段
+    form.append('folder', folder)
     files.forEach(file => form.append('images', file))
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `${API_BASE}/retrieve/upload/gallery`)

@@ -173,7 +173,7 @@ async function importGallery(imageFiles) {
       // 单批失败自动重试一次
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          result = await uploadGallery(batches[i], progress => {
+          result = await uploadGallery(batches[i], galleryFolderName.value, progress => {
             uploadProgress.value = base + progress / batches.length
           })
           break
