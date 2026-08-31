@@ -6,7 +6,6 @@ from urllib.parse import quote
 from typing import List,Optional
 from loguru import logger
 from fastapi import UploadFile,File
-import io
 
 async def fetch_image_from_folder(folder:str,config_path:Optional[str])->List[retrieve.ImageInfo]:
     """

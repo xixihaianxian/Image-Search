@@ -44,39 +44,3 @@ export async function loadLocalGallery(folderPath) {
 export function resolveImageUrl(imageUrl) {
   return `${API_BASE}${imageUrl}`
 }
-
-/**
- * 批量上传图片文件到后端图库
- * @param {File[]} files 图片文件列表
- * @param {(progress:number)=>void} [onProgress] 上传进度回调（0~1）
- * @returns {Promise<Array<{name:string, imageUrl:string, thumbnail?:string}>>} 后端登记结果
- */
-export function uploadGallery(files, onProgress) {
-  return new Promise((resolve, reject) => {
-    const form = new FormData()
-    // 注意：后端路由签名为 images: List[UploadFile]，字段名必须是 "images"
-    files.forEach(file => form.append('images', file))
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', `${API_BASE}/retrieve/upload/gallery`)
-    xhr.upload.onprogress = event => {
-      if (event.lengthComputable && onProgress) {
-        onProgress(event.loaded / event.total)
-      }
-    }
-    xhr.onload = () => {
-      if (xhr.status !== 200) {
-        reject(new Error(`上传失败（HTTP ${xhr.status}）`))
-        return
-      }
-      try {
-        const result = JSON.parse(xhr.responseText)
-        const data = typeof result?.data === 'string' ? JSON.parse(result.data) : result?.data
-        resolve(Array.isArray(data) ? data : [])
-      } catch {
-        reject(new Error('后端响应解析失败'))
-      }
-    }
-    xhr.onerror = () => reject(new Error('网络错误，请检查后端是否运行'))
-    xhr.send(form)
-  })
-}

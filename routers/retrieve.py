@@ -12,18 +12,19 @@ async def get_local_images(image:str):
     image_path = Path(image)
     return FileResponse(path=image_path)
 
-# 快加载
+# 直接映射（导致内存压力）
 @router.post("/log/local/gallery")
-async def loa_gallery(folder:schema_retrieve.LocalDir):
+async def log_gallery(folder:schema_retrieve.LocalDir):
     folder=folder.folder
     config_path=Path(__file__).parent.parent.joinpath("config","config.yml")
-    images=crud_retrieve.fetch_image_from_folder(folder=folder,config_path=config_path)
+    images=await crud_retrieve.fetch_image_from_folder(folder=folder,config_path=config_path)
     images=list(map(lambda item: item.model_dump(by_alias=True), images))
     return schema_response.success_response(
         message="success",
         data=images
     )
 
+# 纯后端加载
 @router.post("/upload/gallery")
 async def upload_gallery(images:List[UploadFile]=File(...)):
     config_path = Path(__file__).parent.parent.joinpath("config", "config.yml")
@@ -32,3 +33,9 @@ async def upload_gallery(images:List[UploadFile]=File(...)):
         message="success",
         data=[item.model_dump(by_alias=True) for item in response]
     )
+
+# 后端加载缩略图，不需要对原图进行迁移
+@router.post("./upload/local/gallery")
+async def upload_local_gallery(folder:schema_retrieve.LocalDir):
+    folder=folder.folder
+    pass

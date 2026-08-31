@@ -1,6 +1,6 @@
 <script setup>
 import { onBeforeUnmount, ref } from 'vue'
-import { resolveImageUrl, uploadGallery } from '../api'
+import { loadLocalGallery, resolveImageUrl } from '../api'
 
 // ---------- 工具栏收起/展开 ----------
 const toolbarCollapsed = ref(false)
@@ -98,115 +98,39 @@ function showToast(message) {
 }
 
 onBeforeUnmount(() => {
-  clearTimeout(toastTimer)
-})
-
-// ---------- 本地图库（本地目录选择） ----------
-// 支持的图片后缀
-const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
-const UPLOAD_BATCH_SIZE = 50
-
-const dirInput = ref(null)
-const galleryImages = ref([]) // [{ name, url }]
-const galleryFolderName = ref('') // 选中目录的名称
-const galleryObjectUrls = ref([]) // 已创建的预览地址，用于释放
-
-// 上传进度状态
-const uploading = ref(false)
-const uploadProgress = ref(1) // 0~1，1 表示空闲
-const uploadBatchText = ref('')
-
-function triggerPickDir() {
-  dirInput.value?.click()
-}
-
-function onDirChange(event) {
-  const files = Array.from(event.target.files ?? [])
-  // 清空 value，允许重复选择同一目录
-  event.target.value = ''
-  if (!files.length) return
-
-  // webkitRelativePath 形如 "目录名/子目录/图片.jpg"，取第一段作为目录名
-  galleryFolderName.value = files[0].webkitRelativePath.split('/')[0] || ''
-
-  // 释放上一批预览地址
-  galleryObjectUrls.value.forEach(url => URL.revokeObjectURL(url))
-  galleryObjectUrls.value = []
-
-  const imageFiles = []
-  const images = []
-  for (const file of files) {
-    const dotIndex = file.name.lastIndexOf('.')
-    const ext = dotIndex === -1 ? '' : file.name.slice(dotIndex).toLowerCase()
-    if (!IMAGE_EXTS.includes(ext)) continue
-    imageFiles.push(file)
-    const url = URL.createObjectURL(file)
-    galleryObjectUrls.value.push(url)
-    images.push({ name: file.name, url })
-  }
-  galleryImages.value = images
-
-  if (!images.length) {
-    showToast('所选目录中没有支持的图片文件')
-  }
-
-  // 本地秒开的同时，分批上传登记到后端（完成后切换为后端返回的图片）
-  if (imageFiles.length) {
-    importGallery(imageFiles)
-  }
-}
-
-// 分批上传登记图库；完成后用后端返回的 URL 替换本地预览
-async function importGallery(imageFiles) {
-  uploading.value = true
-  uploadProgress.value = 0
-  try {
-    const batches = []
-    for (let i = 0; i < imageFiles.length; i += UPLOAD_BATCH_SIZE) {
-      batches.push(imageFiles.slice(i, i + UPLOAD_BATCH_SIZE))
-    }
-    const registered = []
-    for (let i = 0; i < batches.length; i++) {
-      uploadBatchText.value = `第 ${i + 1}/${batches.length} 批`
-      const base = i / batches.length
-      let result = null
-      // 单批失败自动重试一次
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          result = await uploadGallery(batches[i], progress => {
-            uploadProgress.value = base + progress / batches.length
-          })
-          break
-        } catch (error) {
-          if (attempt === 1) throw error
-        }
-      }
-      registered.push(...result)
-    }
-    if (registered.length) {
-      galleryImages.value = registered.map(item => ({
-        name: item.name,
-        // 优先使用缩略图，小格子展示更省内存
-        url: resolveImageUrl(item.thumbnail || item.imageUrl),
-      }))
-    }
-    showToast(`已导入 ${registered.length} 张图片`)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.warn('[图库导入失败]', message)
-    showToast(`导入失败：${message}（当前展示为本地预览）`)
-  } finally {
-    uploading.value = false
-    uploadProgress.value = 1
-    uploadBatchText.value = ''
-  }
-}
-
-onBeforeUnmount(() => {
   if (queryObjectUrl) URL.revokeObjectURL(queryObjectUrl)
-  galleryObjectUrls.value.forEach(url => URL.revokeObjectURL(url))
   clearTimeout(toastTimer)
 })
+
+// ---------- 本地图库（原生目录选择） ----------
+const galleryImages = ref([]) // [{ name, url }]
+const galleryFolder = ref('') // 选中目录的绝对路径
+const galleryLoading = ref(false)
+const galleryError = ref('')
+
+// 点击「目录」：弹出原生目录选择框，拿绝对路径后请求后端扫盘
+async function selectDirectory() {
+  if (!window.api?.selectDirectory) {
+    showToast('目录选择需在 Electron 桌面端使用')
+    return
+  }
+  const folderPath = await window.api.selectDirectory()
+  if (!folderPath) return // 用户取消
+  galleryLoading.value = true
+  galleryError.value = ''
+  try {
+    const images = await loadLocalGallery(folderPath)
+    galleryFolder.value = folderPath
+    galleryImages.value = images.map(item => ({
+      name: item.name,
+      url: resolveImageUrl(item.imageUrl),
+    }))
+  } catch (error) {
+    galleryError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    galleryLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -289,21 +213,17 @@ onBeforeUnmount(() => {
             共 {{ galleryImages.length }} 张
           </span>
 
-          <!-- 上传进度条 -->
-          <div v-if="uploading" class="upload-progress">
-            <div class="upload-progress__bar">
-              <div
-                class="upload-progress__fill"
-                :style="{ width: `${Math.round(uploadProgress * 100)}%` }"
-              ></div>
-            </div>
-            <span class="upload-progress__text">
-              正在导入 {{ uploadBatchText }} · {{ Math.round(uploadProgress * 100) }}%
-            </span>
+          <!-- 加载中 -->
+          <div v-if="galleryLoading" class="card-empty">
+            <span class="spinner" aria-hidden="true"></span>
+            <p>正在扫描目录…</p>
           </div>
 
+          <!-- 出错 -->
+          <div v-else-if="galleryError" class="result-error">{{ galleryError }}</div>
+
           <!-- 图库网格 -->
-          <div v-if="galleryImages.length" class="result-grid">
+          <div v-else-if="galleryImages.length" class="result-grid">
             <figure v-for="item in galleryImages" :key="item.url" class="result-item">
               <img :src="item.url" :alt="item.name" :title="item.name" loading="lazy" />
               <figcaption>{{ item.name }}</figcaption>
@@ -320,19 +240,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <!-- 本地目录选择：展示框与按钮拼接为一体 -->
-        <input
-          ref="dirInput"
-          class="visually-hidden"
-          type="file"
-          webkitdirectory
-          multiple
-          @change="onDirChange"
-        />
         <div class="dir-group">
-          <div class="dir-display" :title="galleryFolderName">
-            <span class="dir-display__text">{{ galleryFolderName || '未选择目录' }}</span>
+          <div class="dir-display" :title="galleryFolder">
+            <span class="dir-display__text">{{ galleryFolder || '未选择目录' }}</span>
           </div>
-          <button class="dir-group__btn" type="button" @click="triggerPickDir">目 录</button>
+          <button class="dir-group__btn" type="button" @click="selectDirectory">目 录</button>
         </div>
       </section>
     </div>
@@ -666,44 +578,20 @@ onBeforeUnmount(() => {
   color: var(--color-accent-light);
 }
 
-/* ---------- 上传进度条 ---------- */
-.upload-progress {
-  position: absolute;
-  left: 1rem;
-  right: 1rem;
-  bottom: 1rem;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.6rem 1rem;
-  border: 1px solid rgba(99, 102, 241, 0.25);
-  border-radius: 0.9rem;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(8px);
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.15);
+/* ---------- 加载指示 ---------- */
+.spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid var(--color-accent-light);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
 }
 
-.upload-progress__bar {
-  flex: 1;
-  height: 0.5rem;
-  overflow: hidden;
-  border-radius: 9999px;
-  background: #e2e8f0;
-}
-
-.upload-progress__fill {
-  height: 100%;
-  border-radius: 9999px;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-sky));
-  transition: width 0.2s ease;
-}
-
-.upload-progress__text {
-  flex-shrink: 0;
-  color: var(--color-text-secondary);
-  font-size: 0.75rem;
-  white-space: nowrap;
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ---------- 结果网格 ---------- */
