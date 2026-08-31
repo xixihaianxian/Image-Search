@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi import exceptions,status
-from shcema import index
+from schema import response as rp
 from fastapi.middleware.cors import CORSMiddleware
 from routers import retrieve
 
@@ -11,6 +11,12 @@ app.mount(
     path="/static",
     app=StaticFiles(directory="./static"),
     name="static"
+)
+
+app.mount(
+    path="/upload",
+    app=StaticFiles(directory="./upload"),
+    name="upload",
 )
 
 app.add_middleware(
@@ -26,5 +32,5 @@ app.include_router(retrieve.router)
 
 @app.get("/ImageSearch")
 def image_search():
-    response=index.success_response(message="Welcome to Image Search")
+    response=rp.success_response(message="Welcome to Image Search")
     return response

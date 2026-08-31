@@ -11,3 +11,13 @@ image_extensions:
   - .jpeg
   - .bmp
   - .webp
+
+# 存放上传的图片数据
+gallery_dir: upload
+
+# 缩略图配置
+thumbnail:
+  # 大小
+  size:
+    height: 128
+    width: 128

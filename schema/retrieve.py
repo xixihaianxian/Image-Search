@@ -18,6 +18,8 @@ class LocalDir(BaseModel):
 class ImageInfo(BaseModel):
     name:str=Field(validation_alias="name",serialization_alias="name")
     image_url:str=Field(validation_alias="imageUrl",serialization_alias="imageUrl")
+    # 缩略图url
+    thumbnail:Optional[str]=Field(default=None)
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True,

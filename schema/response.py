@@ -4,7 +4,7 @@ from jsonablr import encode
 from typing import Optional
 import json
 
-def success_response(message:str,data:Optional[str]=None):
+def success_response(message:str,data=None):
     if hasattr(data,"model_dump"):
         data.model_dump(by_alias=True)
     return {

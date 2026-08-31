@@ -1,6 +1,6 @@
 <script setup>
 import { onBeforeUnmount, ref } from 'vue'
-import { loadLocalGallery, resolveImageUrl } from '../api'
+import { resolveImageUrl, uploadGallery } from '../api'
 
 // ---------- 工具栏收起/展开 ----------
 const toolbarCollapsed = ref(false)
@@ -104,11 +104,17 @@ onBeforeUnmount(() => {
 // ---------- 本地图库（本地目录选择） ----------
 // 支持的图片后缀
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
+const UPLOAD_BATCH_SIZE = 50
 
 const dirInput = ref(null)
 const galleryImages = ref([]) // [{ name, url }]
 const galleryFolderName = ref('') // 选中目录的名称
 const galleryObjectUrls = ref([]) // 已创建的预览地址，用于释放
+
+// 上传进度状态
+const uploading = ref(false)
+const uploadProgress = ref(1) // 0~1，1 表示空闲
+const uploadBatchText = ref('')
 
 function triggerPickDir() {
   dirInput.value?.click()
@@ -127,11 +133,13 @@ function onDirChange(event) {
   galleryObjectUrls.value.forEach(url => URL.revokeObjectURL(url))
   galleryObjectUrls.value = []
 
+  const imageFiles = []
   const images = []
   for (const file of files) {
     const dotIndex = file.name.lastIndexOf('.')
     const ext = dotIndex === -1 ? '' : file.name.slice(dotIndex).toLowerCase()
     if (!IMAGE_EXTS.includes(ext)) continue
+    imageFiles.push(file)
     const url = URL.createObjectURL(file)
     galleryObjectUrls.value.push(url)
     images.push({ name: file.name, url })
@@ -142,25 +150,55 @@ function onDirChange(event) {
     showToast('所选目录中没有支持的图片文件')
   }
 
-  // 选择完成后向后端发起图库登记请求（目录名作为 folderPath，失败时保留本地渲染）
-  syncGalleryToBackend(galleryFolderName.value)
+  // 本地秒开的同时，分批上传登记到后端（完成后切换为后端返回的图片）
+  if (imageFiles.length) {
+    importGallery(imageFiles)
+  }
 }
 
-// 向后端登记图库目录：成功则改用后端返回的图片，失败则展示报错并保留本地渲染
-async function syncGalleryToBackend(folderPath) {
-  if (!folderPath) return
+// 分批上传登记图库；完成后用后端返回的 URL 替换本地预览
+async function importGallery(imageFiles) {
+  uploading.value = true
+  uploadProgress.value = 0
   try {
-    const images = await loadLocalGallery(folderPath)
-    if (!images.length) return
-    galleryImages.value = images.map(item => ({
-      name: item.name,
-      url: resolveImageUrl(item.imageUrl),
-    }))
-    showToast(`后端已收录 ${images.length} 张图片`)
+    const batches = []
+    for (let i = 0; i < imageFiles.length; i += UPLOAD_BATCH_SIZE) {
+      batches.push(imageFiles.slice(i, i + UPLOAD_BATCH_SIZE))
+    }
+    const registered = []
+    for (let i = 0; i < batches.length; i++) {
+      uploadBatchText.value = `第 ${i + 1}/${batches.length} 批`
+      const base = i / batches.length
+      let result = null
+      // 单批失败自动重试一次
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          result = await uploadGallery(batches[i], progress => {
+            uploadProgress.value = base + progress / batches.length
+          })
+          break
+        } catch (error) {
+          if (attempt === 1) throw error
+        }
+      }
+      registered.push(...result)
+    }
+    if (registered.length) {
+      galleryImages.value = registered.map(item => ({
+        name: item.name,
+        // 优先使用缩略图，小格子展示更省内存
+        url: resolveImageUrl(item.thumbnail || item.imageUrl),
+      }))
+    }
+    showToast(`已导入 ${registered.length} 张图片`)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    console.warn('[图库同步失败]', message)
-    showToast(`后端同步失败：${message}`)
+    console.warn('[图库导入失败]', message)
+    showToast(`导入失败：${message}（当前展示为本地预览）`)
+  } finally {
+    uploading.value = false
+    uploadProgress.value = 1
+    uploadBatchText.value = ''
   }
 }
 
@@ -250,6 +288,19 @@ onBeforeUnmount(() => {
           <span v-if="galleryImages.length" class="result-card__count">
             共 {{ galleryImages.length }} 张
           </span>
+
+          <!-- 上传进度条 -->
+          <div v-if="uploading" class="upload-progress">
+            <div class="upload-progress__bar">
+              <div
+                class="upload-progress__fill"
+                :style="{ width: `${Math.round(uploadProgress * 100)}%` }"
+              ></div>
+            </div>
+            <span class="upload-progress__text">
+              正在导入 {{ uploadBatchText }} · {{ Math.round(uploadProgress * 100) }}%
+            </span>
+          </div>
 
           <!-- 图库网格 -->
           <div v-if="galleryImages.length" class="result-grid">
@@ -613,6 +664,46 @@ onBeforeUnmount(() => {
   width: 3.25rem;
   height: 3.25rem;
   color: var(--color-accent-light);
+}
+
+/* ---------- 上传进度条 ---------- */
+.upload-progress {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.15);
+}
+
+.upload-progress__bar {
+  flex: 1;
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: #e2e8f0;
+}
+
+.upload-progress__fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-sky));
+  transition: width 0.2s ease;
+}
+
+.upload-progress__text {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 /* ---------- 结果网格 ---------- */
