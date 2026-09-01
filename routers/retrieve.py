@@ -15,6 +15,7 @@ async def get_local_images(image:str):
 # 直接映射（导致内存压力）
 @router.post("/log/local/gallery")
 async def log_gallery(folder:schema_retrieve.LocalDir):
+    # folder为计算机完整路径
     folder=folder.folder
     config_path=Path(__file__).parent.parent.joinpath("config","config.yml")
     images=await crud_retrieve.fetch_image_from_folder(folder=folder,config_path=config_path)
@@ -37,5 +38,6 @@ async def upload_gallery(images:List[UploadFile]=File(...),folder:str=Form(...))
 # 后端加载缩略图，不需要对原图进行迁移
 @router.post("./upload/local/gallery")
 async def upload_local_gallery(folder:schema_retrieve.LocalDir):
+    # folder为计算机完整路径
     folder=folder.folder
     pass

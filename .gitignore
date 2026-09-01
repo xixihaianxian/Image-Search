@@ -1,2 +1,5 @@
 module/*
 upload/*
+
+# 数据库
+database/image_search.sql
