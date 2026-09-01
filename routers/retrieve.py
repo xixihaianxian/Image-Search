@@ -1,4 +1,4 @@
-from fastapi import APIRouter,UploadFile,File
+from fastapi import APIRouter,UploadFile,File,Form
 from schema import retrieve as schema_retrieve, response as schema_response
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -26,9 +26,9 @@ async def log_gallery(folder:schema_retrieve.LocalDir):
 
 # 纯后端加载
 @router.post("/upload/gallery")
-async def upload_gallery(images:List[UploadFile]=File(...)):
+async def upload_gallery(images:List[UploadFile]=File(...),folder:str=Form(...)):
     config_path = Path(__file__).parent.parent.joinpath("config", "config.yml")
-    response=await crud_retrieve.loading_image(images=images,config_path=str(config_path))
+    response=await crud_retrieve.loading_image(images=images,config_path=str(config_path),folder=folder)
     return schema_response.success_response(
         message="success",
         data=[item.model_dump(by_alias=True) for item in response]

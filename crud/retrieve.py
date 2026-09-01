@@ -32,13 +32,22 @@ async def fetch_image_from_folder(folder:str,config_path:Optional[str])->List[re
             images.append(image_info)
     return images
 
-async def loading_image(config_path:str,images:List[UploadFile]=File(...))->List[retrieve.ImageInfo]:
+async def loading_image(config_path:str,folder:str,images:List[UploadFile]=File(...))->List[retrieve.ImageInfo]:
+    """
+    Args:
+        config_path: 配置文件路径
+        folder: 选择的文件路径
+        images: 从前端获取的文件信息
+    Returns:
+        处理之后的图片信息
+    """
     config = inquiry.load_config(config_file=config_path)
     gallery_dir=config.get("gallery_dir")
     image_extensions = config.get("image_extensions")
     thumbnail_height=config["thumbnail"]["size"]["height"]
     thumbnail_width=config["thumbnail"]["size"]["width"]
-    gallery_dir_path=Path(__file__).parent.parent.joinpath(gallery_dir)
+    # 图片保存在gallery_dir目录的子目录里面，子目录名由选择的目录名决定
+    gallery_dir_path=Path(__file__).parent.parent.joinpath(gallery_dir,folder)
     upload_images=list()
     # 如果目录不存在，创建
     if not gallery_dir_path.exists():
@@ -70,8 +79,8 @@ async def loading_image(config_path:str,images:List[UploadFile]=File(...))->List
             upload_images.append(
                 retrieve.ImageInfo(
                     name=image.filename,
-                    image_url=f"/{gallery_dir}/{dest.name}",
-                    thumbnail=f"/{gallery_dir}/{thumbnail_path.name}",
+                    image_url=f"/{gallery_dir}/{folder}/{dest.name}",
+                    thumbnail=f"/{gallery_dir}/{folder}/{thumbnail_path.name}",
                 )
             )
         except Exception as error:
