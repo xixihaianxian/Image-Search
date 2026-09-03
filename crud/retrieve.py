@@ -211,3 +211,28 @@ async def loging_folder_images(thumbnail_dir:str,folder:str,config_path:str,db:A
             )
             db.add(image_data)
             await db.commit()
+
+async def fetch_images(folder:str,page:int,page_size:int,db:AsyncSession):
+    offset=(page-1)*page_size
+    stmt = (
+        select(retrieve_model.Images)
+        .join(
+            retrieve_model.Folders,
+            retrieve_model.Folders.id == retrieve_model.Images.folder_id
+        )
+        .where(
+            retrieve_model.Folders.folder_path == folder
+        )
+        .limit(
+            limit=page_size
+        )
+        .offset(
+            offset=offset
+        )
+    )
+    result=await db.execute(stmt)
+    images=result.scalars().all()
+    if len(images)==0:
+        logger.warning(f"No more pictures!")
+        return None
+    return images

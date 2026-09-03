@@ -2,7 +2,7 @@ from fastapi import APIRouter,UploadFile,File,Form,Depends
 from schema import retrieve as schema_retrieve, response as schema_response
 from fastapi.responses import FileResponse
 from pathlib import Path
-from crud import retrieve as crud_retrieve
+from crud import retrieve as crud_retrieve,inquiry
 from typing import List
 from utils import database_contrl
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,5 +50,18 @@ async def upload_local_gallery(folder:schema_retrieve.LocalDir,db:AsyncSession=D
     )
 
 @router.get("/display/gallery")
-async def display_gallery(folder:str,page:int,page_size:int,db:AsyncSession=Depends(database_contrl.get_db())):
-    pass
+async def display_gallery(folder:str,page:int,db:AsyncSession=Depends(database_contrl.get_db())):
+    config_path = Path(__file__).parent.parent.joinpath("config", "config.yml")
+    config=inquiry.load_config(config_file=config_path)
+    page_size=config["page_size"]
+    images=await crud_retrieve.fetch_images(folder=folder,page=page,page_size=page_size,db=db)
+    if images is None:
+        return schema_response.success_response(
+            message="No more pictures!"
+        )
+    else:
+        images=list(map(lambda item: schema_retrieve.DetailImageInfo.model_validate(item),images))
+        return schema_response.success_response(
+            message="success",
+            data=images,
+        )

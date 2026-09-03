@@ -24,3 +24,13 @@ class ImageInfo(BaseModel):
         from_attributes=True,
         populate_by_name=True,
     )
+
+class DetailImageInfo(BaseModel):
+    path:str=Field(validation_alias="path",serialization_alias="path")
+    name:str=Field(validation_alias="name",serialization_alias="name")
+    extension:str=Field(validation_alias="extension",serialization_alias="extension")
+    thumbnail_path:str=Field(validation_alias="thumbnailPath",serialization_alias="thumbnailPath")
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+    )
