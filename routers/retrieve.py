@@ -39,7 +39,7 @@ async def upload_gallery(images:List[UploadFile]=File(...),folder:str=Form(...))
 
 # 后端加载缩略图，不需要对原图进行迁移
 @router.post("/upload/local/gallery")
-async def upload_local_gallery(folder:schema_retrieve.LocalDir,db:AsyncSession=Depends(database_contrl.get_db())):
+async def upload_local_gallery(folder:schema_retrieve.LocalDir,db:AsyncSession=Depends(database_contrl.get_db)):
     # folder为计算机完整路径
     folder=folder.folder
     config_path = Path(__file__).parent.parent.joinpath("config", "config.yml")
@@ -50,7 +50,7 @@ async def upload_local_gallery(folder:schema_retrieve.LocalDir,db:AsyncSession=D
     )
 
 @router.get("/display/gallery")
-async def display_gallery(folder:str,page:int,db:AsyncSession=Depends(database_contrl.get_db())):
+async def display_gallery(folder:str,page:int,db:AsyncSession=Depends(database_contrl.get_db)):
     config_path = Path(__file__).parent.parent.joinpath("config", "config.yml")
     config=inquiry.load_config(config_file=config_path)
     page_size=config["page_size"]

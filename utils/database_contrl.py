@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 
 # 登录配置文件
-config = inquiry.load_config("./config/config.yaml")
+config = inquiry.load_config("./config/config.yml")
 
 # 获取数据库相关配置
 database_config = config.get("database")
@@ -18,7 +18,7 @@ if database_config is None:
     max_overflow=int(os.getenv("MAX_OVERFLOW"))
 else:
     database_url = database_config["database_url"]
-    echo = database_config["echo"].lower() == "true"
+    echo = database_config["echo"]
     pool_size = database_config["pool_size"]
     max_overflow = database_config["max_overflow"]
 
@@ -42,5 +42,6 @@ async def get_db():
             await session.commit()
         except Exception:
             await session.rollback()
+            raise
         finally:
             await session.close()

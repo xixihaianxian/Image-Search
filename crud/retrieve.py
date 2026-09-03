@@ -126,19 +126,37 @@ async def add_folder_data(folder:str,db:AsyncSession)->str:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Failed to log in to {folder}")
     return indicate
 
-async def generate_thumbnail_image(file_path:str,thumbnail_path:str,thumbnail_config:Dict):
-    """生成缩略图同时保存缩略图
+async def generate_thumbnail_image(file_path: str,thumbnail_path: str,thumbnail_config: Dict):
+    """生成缩略图并保存
     Args:
         file_path: 原始图片路径
         thumbnail_path: 缩略图路径
         thumbnail_config: 缩略图配置
+    Returns:
+        str: 最终生成的缩略图路径
     """
-    height=thumbnail_config["size"]["height"]
-    width=thumbnail_config["size"]["width"]
+    height = thumbnail_config["size"]["height"]
+    width = thumbnail_config["size"]["width"]
     with Image.open(file_path) as pil_img:
         max_size = (width, height)
-        pil_img.thumbnail(size=max_size, resample=Image.LANCZOS)
-        pil_img.save(thumbnail_path)
+        pil_img.thumbnail(
+            size=max_size,
+            resample=Image.LANCZOS
+        )
+        try:
+            pil_img.save(thumbnail_path)
+        except OSError:
+            logger.warning(
+                f"Failed to save thumbnail {thumbnail_path}, "
+                f"image mode is {pil_img.mode}"
+            )
+            # 改成 PNG
+            thumbnail_path = (
+                os.path.splitext(thumbnail_path)[0] + ".png"
+            )
+            # PNG 对 RGBA 等模式支持比较好
+            pil_img.save(thumbnail_path)
+    return thumbnail_path
 
 # 登录folder中的图片数据
 async def loging_folder_images(thumbnail_dir:str,folder:str,config_path:str,db:AsyncSession):
@@ -173,17 +191,17 @@ async def loging_folder_images(thumbnail_dir:str,folder:str,config_path:str,db:A
         logger.info(f"Upload {folder} images")
         # 创建目录
         thumbnail_folder_path.mkdir(parents=True,exist_ok=True)
-        for file in folder_path.rglob("*"):
+        for index,file in enumerate(folder_path.rglob("*")):
             if file.is_file():
                 if file.suffix.lower() in image_extensions:
-                    thumbnail_path=thumbnail_folder_path.joinpath(f"thumbnail_{file.name}")
-                    await generate_thumbnail_image(file_path=str(file),thumbnail_path=str(thumbnail_path),thumbnail_config=thumbnail_config)
+                    thumbnail_path=thumbnail_folder_path.joinpath(f"{index:0>4}_thumbnail_{file.name}")
+                    thumbnail_path=await generate_thumbnail_image(file_path=str(file),thumbnail_path=str(thumbnail_path),thumbnail_config=thumbnail_config)
                     image_data=retrieve_model.Images(
                         folder_id=folder_id,
                         path=str(file),
                         name=file.name,
                         extension=file.suffix.lower(),
-                        thumbnail_path=f"/upload/{thumbnail_dir}/thumbnail_{file.name}"
+                        thumbnail_path=f"/upload/{thumbnail_dir}/{Path(thumbnail_path).name}"
                     )
                     db.add(image_data)
                     await db.commit()
@@ -198,7 +216,8 @@ async def loging_folder_images(thumbnail_dir:str,folder:str,config_path:str,db:A
         result = await db.execute(stmt)
         db_paths=result.scalars().all()
         file_paths=[str(path) for path in folder_path.rglob("*") if path.is_file() and path.suffix.lower() in image_extensions]
-        missing_paths=[Path(missing_path) for missing_path in file_paths-db_paths]
+        set_db_paths=set(db_paths)
+        missing_paths=[Path(file_path) for file_path in file_paths if file_path not in set_db_paths]
         for missing_path in missing_paths:
             thumbnail_path=thumbnail_folder_path.joinpath(f"thumbnail_{missing_path.name}")
             await generate_thumbnail_image(file_path=str(missing_path),thumbnail_path=str(thumbnail_path),thumbnail_config=thumbnail_config)

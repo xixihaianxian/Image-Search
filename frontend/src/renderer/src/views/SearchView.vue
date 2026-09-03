@@ -1,6 +1,6 @@
 <script setup>
-import { onBeforeUnmount, ref } from 'vue'
-import { loadLocalGallery, resolveImageUrl } from '../api'
+import { onBeforeUnmount, ref, nextTick } from 'vue'
+import { uploadLocalGallery, displayGallery, resolveImageUrl } from '../api'
 
 // ---------- 工具栏收起/展开 ----------
 const toolbarCollapsed = ref(false)
@@ -102,13 +102,17 @@ onBeforeUnmount(() => {
   clearTimeout(toastTimer)
 })
 
-// ---------- 本地图库（原生目录选择） ----------
+// ---------- 本地图库（原生目录选择 + 无限滚动分页） ----------
 const galleryImages = ref([]) // [{ name, url }]
 const galleryFolder = ref('') // 选中目录的绝对路径
 const galleryLoading = ref(false)
 const galleryError = ref('')
+const galleryPage = ref(1) // 当前已加载的页码
+const hasMore = ref(true) // 是否还有更多图片
+const galleryLoadingMore = ref(false) // 是否正在加载下一页
+const gridEl = ref(null) // 网格容器，用于判断是否已铺满可视区
 
-// 点击「目录」：弹出原生目录选择框，拿绝对路径后请求后端扫盘
+// 点击「目录」：原生目录框拿绝对路径 → 上传目录给后端扫盘入库 → 请求第 1 页展示
 async function selectDirectory() {
   if (!window.api?.selectDirectory) {
     showToast('目录选择需在 Electron 桌面端使用')
@@ -119,16 +123,64 @@ async function selectDirectory() {
   galleryLoading.value = true
   galleryError.value = ''
   try {
-    const images = await loadLocalGallery(folderPath)
+    // 1. 上传目录（后端扫描生成缩略图 + 入库）
+    await uploadLocalGallery(folderPath)
+    // 2. 请求第 1 页数据展示
+    const images = await displayGallery(folderPath, 1)
     galleryFolder.value = folderPath
+    galleryPage.value = 1
+    hasMore.value = images.length > 0
     galleryImages.value = images.map(item => ({
       name: item.name,
-      url: resolveImageUrl(item.imageUrl),
+      url: resolveImageUrl(item.thumbnailPath),
     }))
   } catch (error) {
     galleryError.value = error instanceof Error ? error.message : String(error)
   } finally {
     galleryLoading.value = false
+  }
+  // 首屏未铺满时自动续拉，直到网格可滚动或加载完
+  ensureGridScrollable()
+}
+
+// 加载下一页并追加到网格
+async function loadMore() {
+  if (!hasMore.value || galleryLoadingMore.value || galleryLoading.value) return
+  galleryLoadingMore.value = true
+  try {
+    const next = await displayGallery(galleryFolder.value, galleryPage.value + 1)
+    if (!next.length) {
+      hasMore.value = false
+    } else {
+      galleryPage.value += 1
+      galleryImages.value.push(...next.map(item => ({
+        name: item.name,
+        url: resolveImageUrl(item.thumbnailPath),
+      })))
+    }
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error))
+  } finally {
+    galleryLoadingMore.value = false
+  }
+}
+
+// 若网格内容未溢出（未铺满可视区）且还有更多，则继续加载，直到铺满或加载完
+async function ensureGridScrollable() {
+  await nextTick()
+  const el = gridEl.value
+  if (!el || !hasMore.value) return
+  if (el.scrollHeight <= el.clientHeight) {
+    await loadMore()
+    ensureGridScrollable()
+  }
+}
+
+// 网格滚动到底部附近时触发加载下一页
+function onGridScroll(event) {
+  const el = event.target
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 100) {
+    loadMore()
   }
 }
 </script>
@@ -223,11 +275,19 @@ async function selectDirectory() {
           <div v-else-if="galleryError" class="result-error">{{ galleryError }}</div>
 
           <!-- 图库网格 -->
-          <div v-else-if="galleryImages.length" class="result-grid">
+          <div v-else-if="galleryImages.length" ref="gridEl" class="result-grid" @scroll="onGridScroll">
             <figure v-for="item in galleryImages" :key="item.url" class="result-item">
               <img :src="item.url" :alt="item.name" :title="item.name" loading="lazy" />
               <figcaption>{{ item.name }}</figcaption>
             </figure>
+            <!-- 底部加载状态条 -->
+            <div class="grid-footer">
+              <template v-if="galleryLoadingMore">
+                <span class="spinner spinner--small" aria-hidden="true"></span>
+                <span>加载中…</span>
+              </template>
+              <span v-else-if="!hasMore">没有更多了</span>
+            </div>
           </div>
 
           <!-- 空状态 -->
@@ -626,6 +686,7 @@ async function selectDirectory() {
   display: grid;
   flex: 1;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-auto-rows: max-content;
   gap: 0.9rem;
   align-content: start;
   min-height: 0;
@@ -674,6 +735,25 @@ async function selectDirectory() {
   font-size: 0.72rem;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 网格底部加载状态条 */
+.grid-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+/* 小号加载指示 */
+.spinner--small {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-width: 2px;
 }
 
 /* 错误提示 */
