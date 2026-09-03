@@ -1,9 +1,11 @@
-from fastapi import APIRouter,UploadFile,File,Form
+from fastapi import APIRouter,UploadFile,File,Form,Depends
 from schema import retrieve as schema_retrieve, response as schema_response
 from fastapi.responses import FileResponse
 from pathlib import Path
 from crud import retrieve as crud_retrieve
 from typing import List
+from utils import database_contrl
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/retrieve",tags=["retrieve"])
 
@@ -36,8 +38,17 @@ async def upload_gallery(images:List[UploadFile]=File(...),folder:str=Form(...))
     )
 
 # 后端加载缩略图，不需要对原图进行迁移
-@router.post("./upload/local/gallery")
-async def upload_local_gallery(folder:schema_retrieve.LocalDir):
+@router.post("/upload/local/gallery")
+async def upload_local_gallery(folder:schema_retrieve.LocalDir,db:AsyncSession=Depends(database_contrl.get_db())):
     # folder为计算机完整路径
     folder=folder.folder
+    config_path = Path(__file__).parent.parent.joinpath("config", "config.yml")
+    thumbnail_dir=await crud_retrieve.add_folder_data(folder=folder,db=db)
+    await crud_retrieve.loging_folder_images(thumbnail_dir=thumbnail_dir,folder=folder,db=db,config_path=config_path)
+    return schema_response.success_response(
+        message="success",
+    )
+
+@router.get("/display/gallery")
+async def display_gallery(folder:str,page:int,page_size:int,db:AsyncSession=Depends(database_contrl.get_db())):
     pass
