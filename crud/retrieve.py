@@ -3,7 +3,7 @@ from crud import inquiry
 from pathlib import Path
 from schema import retrieve
 from urllib.parse import quote
-from typing import List,Optional
+from typing import List,Optional,Tuple
 from loguru import logger
 from fastapi import UploadFile,File
 
@@ -87,3 +87,22 @@ async def loading_image(config_path:str,folder:str,images:List[UploadFile]=File(
             # 单张图片处理失败不影响整批上传
             logger.error(f"Failed to load image {image.filename}: {error}")
     return upload_images
+
+# 更新folders表
+def add_folder_data(folder:str)->str:
+    """
+    Args:
+        folder: 前端需要登录的目录
+    Returns:
+        缩略图存放目录
+    """
+    pass
+
+# 登录folder中的图片数据
+def loging_folder_images(thumbnail_dir:str,folder:str):
+    """
+    Args:
+        folder: 需要操作的目录
+        thumbnail_dir: 缩略图存放目录
+    """
+    pass

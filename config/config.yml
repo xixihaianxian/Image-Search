@@ -21,3 +21,10 @@ thumbnail:
   size:
     height: 128
     width: 128
+
+# 数据库配置
+database:
+  database_url: "sqlite:///./database/image_search.db"
+  echo: true
+  pool_size: 10
+  max_overflow: 20
