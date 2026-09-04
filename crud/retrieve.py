@@ -6,6 +6,7 @@ from urllib.parse import quote
 from typing import List,Optional,Tuple,Dict
 from loguru import logger
 from fastapi import UploadFile,File,status,HTTPException
+from starlette.concurrency import run_in_threadpool
 from model import retrieve as retrieve_model
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,8 +127,8 @@ async def add_folder_data(folder:str,db:AsyncSession)->str:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Failed to log in to {folder}")
     return indicate
 
-async def generate_thumbnail_image(file_path: str,thumbnail_path: str,thumbnail_config: Dict):
-    """生成缩略图并保存
+def _generate_thumbnail_image_sync(file_path: str,thumbnail_path: str,thumbnail_config: Dict)->str:
+    """PIL 解码/缩放/保存是 CPU 密集的同步操作
     Args:
         file_path: 原始图片路径
         thumbnail_path: 缩略图路径
@@ -157,6 +158,22 @@ async def generate_thumbnail_image(file_path: str,thumbnail_path: str,thumbnail_
             # PNG 对 RGBA 等模式支持比较好
             pil_img.save(thumbnail_path)
     return thumbnail_path
+
+async def generate_thumbnail_image(file_path: str,thumbnail_path: str,thumbnail_config: Dict)->str:
+    """生成缩略图并保存（在线程池中执行，避免阻塞事件循环）
+    Args:
+        file_path: 原始图片路径
+        thumbnail_path: 缩略图路径
+        thumbnail_config: 缩略图配置
+    Returns:
+        str: 最终生成的缩略图路径
+    """
+    return await run_in_threadpool(
+        _generate_thumbnail_image_sync,
+        file_path,
+        thumbnail_path,
+        thumbnail_config,
+    )
 
 # 登录folder中的图片数据
 async def loging_folder_images(thumbnail_dir:str,folder:str,config_path:str,db:AsyncSession):

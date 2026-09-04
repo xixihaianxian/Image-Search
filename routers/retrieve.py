@@ -6,6 +6,7 @@ from crud import retrieve as crud_retrieve,inquiry
 from typing import List
 from utils import database_contrl
 from sqlalchemy.ext.asyncio import AsyncSession
+from urllib.parse import quote
 
 router = APIRouter(prefix="/retrieve",tags=["retrieve"])
 
@@ -65,3 +66,18 @@ async def display_gallery(folder:str,page:int,db:AsyncSession=Depends(database_c
             message="success",
             data=images,
         )
+
+# 展示选择的图片
+@router.get("/select/target")
+async def select_target(image_path:str):
+    image_path = Path(image_path)
+    name=image_path.name
+    image_url=f"/retrieve/get/localImage?image={quote(str(image_path))}"
+    image_info=schema_retrieve.ImageInfo(
+        name=name,
+        image_url=image_url,
+    )
+    return schema_response.success_response(
+        message="success",
+        data=image_info,
+    )

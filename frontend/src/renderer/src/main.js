@@ -1,4 +1,6 @@
 import { createApp } from 'vue'
+import '@fontsource/zcool-kuaile'
+import '@fontsource/patrick-hand'
 import './style.css'
 import App from './App.vue'
 import router from './router'

@@ -74,3 +74,35 @@ export async function displayGallery(folderPath, page = 1) {
 export function resolveImageUrl(imageUrl) {
   return `${API_BASE}${imageUrl}`
 }
+
+/**
+ * 登记选中的目标图片，后端返回其展示信息
+ * @param {string} imagePath 选中图片的绝对路径
+ * @returns {Promise<{name:string, imageUrl:string}>}
+ */
+export async function selectTarget(imagePath) {
+  let response
+  try {
+    response = await fetch(
+      `${API_BASE}/retrieve/select/target?image_path=${encodeURIComponent(imagePath)}`
+    )
+  } catch {
+    throw new Error('请求未到达后端或响应被浏览器拦截（后端可能 500），请查看 Network 面板')
+  }
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string') {
+        detail = body.detail
+      }
+    } catch {
+      /* 响应体不是 JSON 时忽略，使用默认提示 */
+    }
+    throw new Error(`获取选中图片失败（${detail}）`)
+  }
+  const result = await response.json()
+  // 兼容 data 为 JSON 字符串或对象两种情况
+  const data = typeof result?.data === 'string' ? JSON.parse(result.data) : result?.data
+  return data ?? {}
+}

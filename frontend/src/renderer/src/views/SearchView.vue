@@ -1,6 +1,6 @@
 <script setup>
 import { onBeforeUnmount, ref, nextTick } from 'vue'
-import { uploadLocalGallery, displayGallery, resolveImageUrl } from '../api'
+import { uploadLocalGallery, displayGallery, resolveImageUrl, selectTarget } from '../api'
 
 // ---------- 工具栏收起/展开 ----------
 const toolbarCollapsed = ref(false)
@@ -18,14 +18,51 @@ function triggerPickImage() {
   fileInput.value?.click()
 }
 
-function onFileChange(event) {
+async function onFileChange(event) {
   const file = event.target.files?.[0]
-  if (!file) return
-  if (queryObjectUrl) URL.revokeObjectURL(queryObjectUrl)
-  queryObjectUrl = URL.createObjectURL(file)
-  queryImage.value = { url: queryObjectUrl, name: file.name }
   // 清空 value，允许重复选择同一文件
   event.target.value = ''
+  if (!file) return
+
+  // Electron 下取选中文件的绝对路径（新版 Electron 移除了 File.path）
+  const filePath = window.api?.getPathForFile ? window.api.getPathForFile(file) : (file.path ?? '')
+  if (!filePath) {
+    fallbackLocalPreview(file)
+    showToast('未获取到文件路径，当前展示本地预览')
+    return
+  }
+
+  try {
+    // 路径发给后端登记，用后端返回的信息展示
+    const data = await selectTarget(filePath)
+    releaseQueryObjectUrl()
+    const displayUrl = resolveImageUrl(data.imageUrl)
+    queryImage.value = {
+      // 加时间戳破坏缓存，避免查询图的 <img> 加载污染之后可能的 cors 请求
+      url: `${displayUrl}${displayUrl.includes('?') ? '&' : '?'}_t=${Date.now()}`,
+      name: data.name || file.name,
+      path: filePath,
+    }
+  } catch (error) {
+    // 接口失败时退回本地预览，保证可用
+    fallbackLocalPreview(file)
+    showToast(error instanceof Error ? error.message : String(error))
+  }
+}
+
+// 释放当前查询图的对象地址
+function releaseQueryObjectUrl() {
+  if (queryObjectUrl) {
+    URL.revokeObjectURL(queryObjectUrl)
+    queryObjectUrl = null
+  }
+}
+
+// 本地 blob 预览兜底（无路径/接口失败时）
+function fallbackLocalPreview(file) {
+  releaseQueryObjectUrl()
+  queryObjectUrl = URL.createObjectURL(file)
+  queryImage.value = { url: queryObjectUrl, name: file.name }
 }
 
 // 移除已选查询图片
@@ -35,17 +72,40 @@ function clearQueryImage() {
   queryImage.value = null
 }
 
-// ---------- 查询图片右键菜单 ----------
+// ---------- 图片右键菜单（查询图 / 图库图通用） ----------
 const ctxMenu = ref({ visible: false, x: 0, y: 0 })
+const ctxTarget = ref(null) // 右键目标图片 { name, url, path? }
+const zoomImage = ref(null) // 放大预览的图片
 const lightboxVisible = ref(false)
 
-function openCtxMenu(event) {
+// 拿原图地址：图库图用 path 走 get/localImage（原图），查询图就是本地 blob
+// 加时间戳参数破坏缓存：no-cors 的 <img> 加载会把"无 CORS 头"的响应存进 HTTP 缓存，
+// 污染之后 cors 模式的下载/放大请求
+function itemOriginalUrl(item) {
+  if (!item) return ''
+  if (item.path) {
+    const url = resolveImageUrl(`/retrieve/get/localImage?image=${encodeURIComponent(item.path)}`)
+    return `${url}${url.includes('?') ? '&' : '?'}_t=${Date.now()}`
+  }
+  return item.url
+}
+
+function openMenu(event, target) {
   event.preventDefault()
-  if (!queryImage.value) return
+  if (!target) return
+  ctxTarget.value = target
   // 视口边缘防溢出
   const x = Math.min(event.clientX, window.innerWidth - 170)
   const y = Math.min(event.clientY, window.innerHeight - 150)
   ctxMenu.value = { visible: true, x, y }
+}
+
+function openCtxMenu(event) {
+  openMenu(event, queryImage.value)
+}
+
+function openGalleryMenu(event, item) {
+  openMenu(event, item)
 }
 
 function closeCtxMenu() {
@@ -54,26 +114,60 @@ function closeCtxMenu() {
 
 function ctxZoom() {
   closeCtxMenu()
+  zoomImage.value = {
+    url: itemOriginalUrl(ctxTarget.value),
+    name: ctxTarget.value?.name,
+  }
   lightboxVisible.value = true
+}
+
+// 在资源管理器中打开图片所在位置并选中
+function ctxOpen() {
+  closeCtxMenu()
+  const target = ctxTarget.value
+  if (!target?.path) {
+    showToast('该图片没有可定位的本地路径')
+    return
+  }
+  window.api?.showItemInFolder(target.path)
 }
 
 async function ctxCopyPath() {
   closeCtxMenu()
+  const target = ctxTarget.value
+  if (!target) return
   try {
-    await navigator.clipboard.writeText(queryImage.value?.name ?? '')
-    showToast('已复制文件名（浏览器无法获取完整本地路径）')
+    if (target.path) {
+      // 图库图：DB 里存的是真实绝对路径
+      await navigator.clipboard.writeText(target.path)
+      showToast('已复制图片路径')
+    } else {
+      await navigator.clipboard.writeText(target.name ?? '')
+      showToast('已复制文件名（浏览器无法获取完整本地路径）')
+    }
   } catch {
     showToast('复制失败')
   }
 }
 
-function ctxDownload() {
+async function ctxDownload() {
   closeCtxMenu()
-  if (!queryImage.value) return
-  const link = document.createElement('a')
-  link.href = queryImage.value.url
-  link.download = queryImage.value.name
-  link.click()
+  const target = ctxTarget.value
+  if (!target) return
+  try {
+    // 跨域地址 download 属性不生效，用 blob 中转；no-store 绕过可能被污染的缓存
+    const response = await fetch(itemOriginalUrl(target), { cache: 'no-store' })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const blob = await response.blob()
+    const objUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objUrl
+    link.download = target.name ?? 'image'
+    link.click()
+    URL.revokeObjectURL(objUrl)
+  } catch {
+    showToast('下载失败，请稍后重试')
+  }
 }
 
 // ---------- 开始搜索 ----------
@@ -132,6 +226,7 @@ async function selectDirectory() {
     hasMore.value = images.length > 0
     galleryImages.value = images.map(item => ({
       name: item.name,
+      path: item.path,
       url: resolveImageUrl(item.thumbnailPath),
     }))
   } catch (error) {
@@ -155,6 +250,7 @@ async function loadMore() {
       galleryPage.value += 1
       galleryImages.value.push(...next.map(item => ({
         name: item.name,
+        path: item.path,
         url: resolveImageUrl(item.thumbnailPath),
       })))
     }
@@ -187,6 +283,13 @@ function onGridScroll(event) {
 
 <template>
   <div class="search-page">
+    <header class="workspace-header">
+      <div>
+        <p class="workspace-header__kicker">IMAGE LAB · 01</p>
+        <h1 class="workspace-header__title">图片检索工作台</h1>
+      </div>
+      <div class="workspace-header__meta"><span class="meta-dot"></span> LOCAL LIBRARY</div>
+    </header>
     <!-- 左侧工具栏 -->
     <aside class="toolbar" :class="{ 'toolbar--collapsed': toolbarCollapsed }">
       <button
@@ -206,6 +309,13 @@ function onGridScroll(event) {
     <div class="content">
       <!-- 左：查询图片 -->
       <section class="panel-col">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-heading__eyebrow">QUERY IMAGE</p>
+            <h2>从一张图片开始</h2>
+          </div>
+          <span class="panel-heading__mark">✦</span>
+        </div>
         <div class="card query-card">
           <template v-if="queryImage">
             <img
@@ -261,9 +371,13 @@ function onGridScroll(event) {
       <!-- 右：检索结果 -->
       <section class="panel-col panel-col--results">
         <div class="card result-card">
-          <span v-if="galleryImages.length" class="result-card__count">
-            共 {{ galleryImages.length }} 张
-          </span>
+          <div v-if="galleryImages.length" class="result-card__heading">
+            <div>
+              <p class="result-card__eyebrow">COLLECTION</p>
+              <h2>图库预览</h2>
+            </div>
+            <span class="result-card__count">共 {{ galleryImages.length }} 张</span>
+          </div>
 
           <!-- 加载中 -->
           <div v-if="galleryLoading" class="card-empty">
@@ -277,7 +391,13 @@ function onGridScroll(event) {
           <!-- 图库网格 -->
           <div v-else-if="galleryImages.length" ref="gridEl" class="result-grid" @scroll="onGridScroll">
             <figure v-for="item in galleryImages" :key="item.url" class="result-item">
-              <img :src="item.url" :alt="item.name" :title="item.name" loading="lazy" />
+              <img
+                :src="item.url"
+                :alt="item.name"
+                :title="item.name"
+                loading="lazy"
+                @contextmenu="openGalleryMenu($event, item)"
+              />
               <figcaption>{{ item.name }}</figcaption>
             </figure>
             <!-- 底部加载状态条 -->
@@ -325,6 +445,7 @@ function onGridScroll(event) {
         @contextmenu.prevent="closeCtxMenu"
       >
         <div class="ctx-menu" :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }">
+          <button class="ctx-menu__item" type="button" @click="ctxOpen">打 开</button>
           <button class="ctx-menu__item" type="button" @click="ctxZoom">放 大</button>
           <button class="ctx-menu__item" type="button" @click="ctxCopyPath">复制路径</button>
           <button class="ctx-menu__item" type="button" @click="ctxDownload">下 载</button>
@@ -336,7 +457,7 @@ function onGridScroll(event) {
     <Teleport to="body">
       <Transition name="view-fade">
         <div v-if="lightboxVisible" class="lightbox" @click="lightboxVisible = false">
-          <img :src="queryImage?.url" :alt="queryImage?.name" />
+          <img :src="zoomImage?.url" :alt="zoomImage?.name" />
         </div>
       </Transition>
     </Teleport>
@@ -348,15 +469,46 @@ function onGridScroll(event) {
 .search-page {
   position: relative;
   z-index: 1;
-  display: flex;
-  gap: 1rem;
+  display: grid;
+  grid-template-columns: 4.25rem minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0 1rem;
   height: 100vh;
-  padding: 1rem;
+  padding: 1.1rem 1.25rem 1.25rem;
   animation: fade-in 0.5s ease both;
 }
 
+.workspace-header {
+  grid-column: 2;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 0 0.45rem 1rem;
+  border-bottom: 1px solid rgba(216, 201, 181, 0.7);
+}
+.workspace-header__kicker, .panel-heading__eyebrow, .result-card__eyebrow { color: var(--color-accent-deep); font-size: 0.68rem; letter-spacing: 0.18em; }
+.workspace-header__title { margin-top: 0.15rem; color: var(--color-text); font-size: clamp(1.35rem, 2.5vw, 2rem); line-height: 1.2; }
+.workspace-header__meta { display: flex; align-items: center; gap: 0.45rem; padding: 0.4rem 0.75rem; border: 1px solid var(--color-border); border-radius: 999px; color: var(--color-text-muted); font-family: 'Patrick Hand', cursive; font-size: 0.8rem; letter-spacing: 0.08em; }
+.meta-dot { width: 0.42rem; height: 0.42rem; border-radius: 50%; background: var(--color-success); box-shadow: 0 0 0 4px rgba(139, 201, 138, 0.15); }
+
+.content {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.5fr);
+  gap: 1.1rem;
+  min-height: 0;
+  min-width: 0;
+  padding-top: 1.1rem;
+}
+
+.panel-col { display: flex; flex-direction: column; gap: 0.75rem; min-height: 0; min-width: 0; }
+.panel-heading { display: flex; align-items: center; justify-content: space-between; min-height: 2.8rem; padding: 0 0.35rem; }
+.panel-heading h2, .result-card__heading h2 { margin-top: 0.12rem; color: var(--color-text); font-size: 1.08rem; font-weight: 400; }
+.panel-heading__mark { display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid var(--color-border); border-radius: 50%; color: var(--color-accent); transform: rotate(12deg); }
+
 /* ---------- 工具栏 ---------- */
 .toolbar {
+  grid-row: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -364,10 +516,10 @@ function onGridScroll(event) {
   width: 4.25rem;
   padding: 1rem 0;
   border: 1px solid var(--color-border);
-  border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.75);
+  border-radius: var(--radius-sketchy);
+  background: rgba(255, 253, 248, 0.78);
   backdrop-filter: blur(10px);
-  box-shadow: 0 8px 30px rgba(99, 102, 241, 0.07);
+  box-shadow: var(--shadow-pixel-sm);
   transition: width 0.28s ease;
 }
 
@@ -381,8 +533,8 @@ function onGridScroll(event) {
   place-items: center;
   width: 2.5rem;
   height: 2.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
   background: var(--color-card);
   color: var(--color-text-secondary);
   transition:
@@ -454,8 +606,8 @@ function onGridScroll(event) {
   display: flex;
   min-width: 0;
   padding: 3px;
-  border-radius: 9999px;
-  background: #eef1fb;
+  border-radius: var(--radius-sketchy);
+  background: var(--color-card);
   box-shadow:
     0 4px 14px rgba(100, 116, 139, 0.08),
     0 10px 26px rgba(99, 102, 241, 0.09);
@@ -482,9 +634,9 @@ function onGridScroll(event) {
   margin-left: auto;
   padding: 0.75rem 2rem;
   border: none;
-  border-radius: 9999px;
-  background: linear-gradient(120deg, var(--color-accent) 0%, var(--color-sky) 100%);
-  color: #ffffff;
+  border-radius: var(--radius-sketchy);
+  background: var(--color-accent);
+  color: var(--color-text);
   font-size: 0.95rem;
   font-weight: 700;
   letter-spacing: 0.15em;
@@ -508,8 +660,8 @@ function onGridScroll(event) {
   left: 50%;
   z-index: 60;
   padding: 0.6rem 1.3rem;
-  border-radius: 9999px;
-  background: rgba(30, 41, 59, 0.85);
+  border-radius: var(--radius-sketchy);
+  background: rgba(74, 63, 53, 0.9);
   color: #f8fafc;
   font-size: 0.85rem;
   white-space: nowrap;
@@ -536,11 +688,11 @@ function onGridScroll(event) {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid rgba(99, 102, 241, 0.16);
-  border-radius: 1.25rem;
-  background: linear-gradient(170deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 255, 0.7) 100%);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
+  background: var(--color-card);
   backdrop-filter: blur(10px);
-  box-shadow: 0 8px 30px rgba(99, 102, 241, 0.07);
+  box-shadow: var(--shadow-pixel-sm);
 }
 
 /* 查询图卡片：叠加淡靛蓝渐变，与结果卡形成主次 */
@@ -550,15 +702,15 @@ function onGridScroll(event) {
   justify-content: center;
   padding: 1rem;
   background:
-    linear-gradient(165deg, rgba(99, 102, 241, 0.07) 0%, rgba(56, 189, 248, 0.03) 45%, rgba(255, 255, 255, 0) 100%),
-    linear-gradient(170deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 255, 0.7) 100%);
+    linear-gradient(165deg, rgba(227, 165, 177, 0.18) 0%, rgba(167, 189, 208, 0.1) 45%, rgba(255, 255, 255, 0) 100%),
+    rgba(255, 253, 248, 0.78);
 }
 
 .query-card__img {
   max-width: 100%;
   max-height: 100%;
   min-height: 0;
-  border-radius: 0.75rem;
+  border-radius: var(--radius-sketchy);
   object-fit: contain;
   box-shadow: 0 6px 20px rgba(100, 116, 139, 0.16);
 }
@@ -574,9 +726,9 @@ function onGridScroll(event) {
   width: 1.75rem;
   height: 1.75rem;
   border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.94);
-  color: #e11d48;
+  border-radius: var(--radius-sketchy);
+  background: var(--color-card);
+  color: var(--color-danger);
   box-shadow: 0 4px 12px rgba(30, 41, 59, 0.18);
   opacity: 0;
   transform: scale(0.85);
@@ -593,12 +745,12 @@ function onGridScroll(event) {
 }
 
 .query-card__remove:hover {
-  background: #e11d48;
+  background: var(--color-danger);
   color: #ffffff;
 }
 
 .query-card__remove:focus-visible {
-  outline: 2px solid #e11d48;
+  outline: 2px solid var(--color-danger);
   outline-offset: 2px;
 }
 
@@ -610,8 +762,8 @@ function onGridScroll(event) {
   max-width: calc(100% - 2rem);
   padding: 0.3rem 0.8rem;
   overflow: hidden;
-  border-radius: 9999px;
-  background: rgba(30, 41, 59, 0.72);
+  border-radius: var(--radius-sketchy);
+  background: rgba(74, 63, 53, 0.85);
   color: #f8fafc;
   font-size: 0.75rem;
   white-space: nowrap;
@@ -661,6 +813,27 @@ function onGridScroll(event) {
   padding: 1rem;
 }
 
+.result-card__heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-height: 2.8rem;
+  margin: 0 0 0.7rem;
+  padding: 0 0.2rem;
+}
+
+.result-card__count {
+  position: static;
+  padding: 0.28rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.72);
+  color: var(--color-accent-deep);
+  font-size: 0.7rem;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+}
+
 /* 结果卡片内的空状态/加载态：撑满卡片并垂直居中 */
 .result-card > .card-empty {
   flex: 1;
@@ -673,9 +846,9 @@ function onGridScroll(event) {
   right: 0.9rem;
   z-index: 1;
   padding: 0.25rem 0.75rem;
-  border: 1px solid rgba(99, 102, 241, 0.3);
-  border-radius: 9999px;
-  background: rgba(238, 242, 255, 0.92);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
+  background: var(--color-card);
   color: var(--color-accent);
   font-size: 0.72rem;
   font-weight: 600;
@@ -701,16 +874,17 @@ function onGridScroll(event) {
 }
 
 .result-grid::-webkit-scrollbar-thumb {
-  border-radius: 9999px;
-  background: #c7d2fe;
+  border-radius: 8px;
+  background: var(--color-border);
 }
 
 .result-item {
   margin: 0;
   overflow: hidden;
-  border: 1px solid rgba(99, 102, 241, 0.14);
-  border-radius: 0.9rem;
-  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
+  background: rgba(255, 253, 248, 0.8);
+  box-shadow: 0 8px 22px rgba(132, 103, 83, 0.1);
   transition:
     transform 0.2s ease,
     box-shadow 0.2s ease;
@@ -761,7 +935,7 @@ function onGridScroll(event) {
   display: grid;
   place-items: center;
   flex: 1;
-  color: #e11d48;
+  color: var(--color-danger);
   font-size: 0.9rem;
 }
 
@@ -769,7 +943,7 @@ function onGridScroll(event) {
 .pill-btn {
   padding: 0.8rem 2.2rem;
   border: 1px solid var(--color-border);
-  border-radius: 9999px;
+  border-radius: var(--radius-sketchy);
   background: var(--color-card);
   color: var(--color-text);
   font-size: 0.95rem;
@@ -810,8 +984,8 @@ function onGridScroll(event) {
 
 .pill-btn--primary {
   border-color: transparent;
-  background: linear-gradient(120deg, var(--color-accent) 0%, var(--color-sky) 100%);
-  color: #ffffff;
+  background: var(--color-accent);
+  color: var(--color-text);
 }
 
 /* ---------- 图片右键菜单 ---------- */
@@ -827,8 +1001,8 @@ function onGridScroll(event) {
   min-width: 9.5rem;
   padding: 0.4rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.85rem;
-  background: #ffffff;
+  border-radius: var(--radius-sketchy);
+  background: var(--color-card);
   box-shadow: 0 16px 40px rgba(30, 41, 59, 0.16);
   animation: menu-pop 0.16s ease both;
 }
@@ -849,7 +1023,7 @@ function onGridScroll(event) {
   width: 100%;
   padding: 0.55rem 1rem;
   border: none;
-  border-radius: 0.6rem;
+  border-radius: var(--radius-sketchy);
   background: transparent;
   color: var(--color-text);
   font-size: 0.88rem;
@@ -861,7 +1035,7 @@ function onGridScroll(event) {
 }
 
 .ctx-menu__item:hover {
-  background: #eef2ff;
+  background: var(--color-border);
   color: var(--color-accent);
 }
 
@@ -870,20 +1044,24 @@ function onGridScroll(event) {
   position: fixed;
   inset: 0;
   z-index: 70;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 2.5rem;
-  background: rgba(15, 23, 42, 0.6);
+  background: rgba(74, 63, 53, 0.6);
   backdrop-filter: blur(6px);
   cursor: zoom-out;
 }
 
 .lightbox img {
+  display: block;
   max-width: 100%;
   max-height: 100%;
-  border-radius: 0.75rem;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--radius-sketchy);
   object-fit: contain;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 16px 50px rgba(74, 63, 53, 0.25);
 }
 
 .view-fade-enter-active,
@@ -921,13 +1099,19 @@ function onGridScroll(event) {
 /* ---------- 窄屏适配 ---------- */
 @media (max-width: 900px) {
   .search-page {
+    display: flex;
     flex-direction: column;
     height: auto;
     min-height: 100vh;
     overflow-y: auto;
   }
 
+  .workspace-header { order: 0; padding-bottom: 0.8rem; }
+  .workspace-header__meta { display: none; }
+  .content { display: grid; order: 1; padding-top: 0.8rem; }
+
   .toolbar {
+    grid-row: auto;
     flex-direction: row;
     width: auto;
     padding: 0.5rem 1rem;

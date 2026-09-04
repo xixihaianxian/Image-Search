@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
 
 function createWindow() {
@@ -28,6 +28,11 @@ app.whenReady().then(() => {
       properties: ['openDirectory'],
     })
     return result.canceled ? null : result.filePaths[0]
+  })
+
+  // 在资源管理器中打开文件所在位置并选中（shell 只能在主进程使用）
+  ipcMain.handle('show-item-in-folder', (_event, path) => {
+    shell.showItemInFolder(path)
   })
 
   createWindow()

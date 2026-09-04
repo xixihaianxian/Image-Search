@@ -1,30 +1,40 @@
-/* 全局基础样式：清新浅色简约 */
+/* 全局基础样式：手绘 · 淡色 · 奶油纸感 */
 :root {
   color-scheme: light;
   font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
+    'ZCOOL KuaiLe',
+    'Patrick Hand',
+    'Comic Sans MS',
     'PingFang SC',
-    'Hiragino Sans GB',
     'Microsoft YaHei',
-    'Noto Sans SC',
+    cursive,
     sans-serif;
-  line-height: 1.5;
+  line-height: 1.7;
   font-weight: 400;
 
-  /* 主题色 */
-  --color-text: #1e293b;
-  --color-text-secondary: #64748b;
-  --color-text-muted: #94a3b8;
-  --color-bg-start: #fafbff;
-  --color-bg-end: #eef2ff;
-  --color-card: #ffffff;
-  --color-border: #e2e8f0;
-  --color-accent: #6366f1;
-  --color-accent-light: #a5b4fc;
-  --color-sky: #38bdf8;
-  --color-rose: #f9a8d4;
+  /* 淡色奶油主题 */
+  --color-text: #4a3f35;
+  --color-text-secondary: #8a7f72;
+  --color-text-muted: #b3a99b;
+  --color-bg-start: #fdf8f0;
+  --color-bg-end: #f6ede2;
+  --color-card: #fffdf8;
+  --color-border: #d8c9b5;
+  --color-accent: #e3a5b1;
+  --color-accent-light: #f2d1d5;
+  --color-accent-deep: #b96d7d;
+  --color-sky: #a7bdd0;
+  --color-rose: #e9bcc6;
+  --color-success: #8bc98a;
+  --color-danger: #e88a8a;
+
+  /* 手绘不规则圆角 */
+  --radius-sketchy: 255px 15px 225px 15px / 15px 225px 15px 255px;
+
+  /* 柔和手绘阴影 */
+  --shadow-pixel: 0 3px 14px rgba(74, 63, 53, 0.12);
+  --shadow-pixel-sm: 0 2px 8px rgba(74, 63, 53, 0.1);
+  --shadow-glow: 0 2px 12px rgba(244, 155, 175, 0.25);
 }
 
 * {
@@ -39,10 +49,9 @@ body {
 }
 
 body {
-  background: linear-gradient(160deg, var(--color-bg-start) 0%, #f1f5fd 55%, var(--color-bg-end) 100%);
+  background: var(--color-bg-start);
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
 #app {
@@ -52,6 +61,21 @@ body {
 button {
   font: inherit;
   cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 8px;
+  border: 2px solid var(--color-bg-start);
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-start);
 }
 
 @media (prefers-reduced-motion: reduce) {
