@@ -9,6 +9,14 @@ from typing import Optional,Tuple,List
 from PIL import Image
 from pathlib import Path
 
+# 余弦相似度计算
+def cosine_similarity(target,feature):
+    dot_result=torch.dot(target,feature)
+    target_length=torch.linalg.norm(target,ord=2)
+    feature_length=torch.linalg.norm(feature,ord=2)
+    similarity=dot_result/(feature_length*target_length)
+    return similarity
+
 def load_config(config_file:Optional[str]):
     """登录yaml配置文件
     Args:
@@ -43,7 +51,7 @@ def get_module_device(module:nn.Module):
             logger.warning(f"The module is empty!")
             return torch.device("cpu")
 
-# 构造特征获取函数
+# 构造特征获取模型
 class FeatureModule(nn.Module):
     def __init__(self,base_module:nn.Module):
         """
@@ -129,7 +137,10 @@ class Vgg16FeatureExtractor:
         data=data.to(device=self.device)
         return data
     def image_to_array(self,image_path:str,shape:Tuple[int,int]=(224,224))->torch.Tensor:
-        image = Image.open(fp=image_path)
+        """
+        image对象->array数组->张量
+        """
+        image = Image.open(fp=image_path).convert("RGB")
         image=image.resize(size=shape)
         image=np.array(image)
         # 转化为tensor张量

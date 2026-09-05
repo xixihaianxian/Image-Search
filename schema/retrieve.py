@@ -1,5 +1,6 @@
 from pydantic import BaseModel,Field,ConfigDict
 from typing import Optional
+from typing import List
 
 class LocalImage(BaseModel):
     image_path:str=Field(validation_alias="imagePath",serialization_alias="imagePath")
@@ -33,4 +34,12 @@ class DetailImageInfo(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True,
+    )
+
+class ImageCollection(BaseModel):
+    target_image:str=Field(validation_alias="targetImage",serialization_alias="targetImage")
+    image_album:List[str]=Field(validation_alias="imageAlbum",serialization_alias="imageAlbum")
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True
     )

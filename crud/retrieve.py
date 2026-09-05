@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 import os
 from uuid import uuid4
+from utils import vgg16_feature_extraction,data_collection
+from torch.utils import data
 
 async def fetch_image_from_folder(folder:str,config_path:Optional[str])->List[retrieve_schema.ImageInfo]:
     """
@@ -272,3 +274,15 @@ async def fetch_images(folder:str,page:int,page_size:int,db:AsyncSession):
         logger.warning(f"No more pictures!")
         return None
     return images
+
+# 图片搜索函数
+async def image_search(target_image:str,image_collection:List[str],db:AsyncSession):
+    feature_extract = vgg16_feature_extraction.Vgg16FeatureExtractor(config_path="./config/config.yml")
+    image_collection_dateset=data_collection.VggDataset(image_collection=image_collection,need_transform=True)
+    vgg16=feature_extract.load_vgg16()
+    module=data_collection.FeatureStripping(base_model=vgg16)
+    image_collection_dataloader=data.DataLoader(
+        dataset=image_collection_dateset,
+        batch_size=16,
+        num_workers=2,
+    )

@@ -81,3 +81,9 @@ async def select_target(image_path:str):
         message="success",
         data=image_info,
     )
+
+# 搜索图片
+@router.post("/search/images")
+async def search_images(image_collection:schema_retrieve.ImageCollection,db:AsyncSession=Depends(database_contrl.get_db())):
+    target_image=image_collection.target_image
+    image_collection=image_collection.image_album
