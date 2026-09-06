@@ -8,6 +8,7 @@ from loguru import logger
 from typing import Optional,Tuple,List
 from PIL import Image
 from pathlib import Path
+from torch.nn import functional as F
 
 # 余弦相似度计算
 def cosine_similarity(target,feature):
@@ -81,6 +82,8 @@ class FeatureModule(nn.Module):
         result=self.avgpool_1x1(feature)
         # (batch_size,channels)
         result=self.flatten(result)
+        # normalize
+        result=F.normalize(result,dim=1,p=2)
         return result
 
 # Vgg16获取图片特征
@@ -184,4 +187,5 @@ if __name__=="__main__":
     feature_module=vgg16_feature_extract.feature_fetch_module(vgg16)
     image=vgg16_feature_extract.image_to_array(image_path="./static/ciocan.jpg")
     image_feature=vgg16_feature_extract.extract_feature(feature_module,image)
-    print(image_feature.shape)
+    image_feature=image_feature.squeeze(0)
+    print(torch.linalg.norm(image_feature,ord=2))

@@ -1,5 +1,5 @@
 from sqlalchemy.orm import DeclarativeBase,mapped_column,Mapped
-from sqlalchemy import TEXT,INTEGER,ForeignKey,Index,DATETIME
+from sqlalchemy import TEXT,INTEGER,ForeignKey,Index,DATETIME,UniqueConstraint
 from datetime import datetime
 
 class TimestampMixin:
@@ -59,4 +59,40 @@ class Images(TimestampMixin, BaseModel):
     __table_args__ = (
         Index("index_name", "name"),
         Index("index_folder_index", "folder_id"),
+    )
+
+class ImageFeatures(BaseModel):
+    __tablename__ = "imagefeatures"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True
+    )
+
+    model: Mapped[str] = mapped_column(
+        TEXT,
+        nullable=False
+    )
+
+    path: Mapped[str] = mapped_column(
+        TEXT,
+        ForeignKey(
+            "images.path",
+            onupdate="CASCADE",
+            ondelete="CASCADE"
+        ),
+        nullable=False
+    )
+
+    feature: Mapped[str] = mapped_column(
+        TEXT,
+        nullable=False,
+        unique=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "model",
+            "path",
+            name="model_path_unique"
+        ),
     )

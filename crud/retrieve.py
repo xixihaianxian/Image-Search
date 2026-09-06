@@ -8,13 +8,18 @@ from loguru import logger
 from fastapi import UploadFile,File,status,HTTPException
 from starlette.concurrency import run_in_threadpool
 from model import retrieve as retrieve_model
-from sqlalchemy import select
+from sqlalchemy import select,text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 import os
 from uuid import uuid4
 from utils import vgg16_feature_extraction,data_collection
 from torch.utils import data
+import torch
+from torch.nn import functional as F
+import random
+from pathlib import Path
+import numpy as np
 
 async def fetch_image_from_folder(folder:str,config_path:Optional[str])->List[retrieve_schema.ImageInfo]:
     """
@@ -275,14 +280,91 @@ async def fetch_images(folder:str,page:int,page_size:int,db:AsyncSession):
         return None
     return images
 
-# 图片搜索函数
-async def image_search(target_image:str,image_collection:List[str],db:AsyncSession):
+async def image_path_to_folder_id(image_path:str,db:AsyncSession):
+    """
+    Args:
+        image_path: 图片路径
+        db: 数据库
+    Returns:
+        目录id
+    """
+    result=await db.execute(
+        text(
+            f"select folder_id from images where path={image_path}"
+        )
+    )
+    folder_id=result.scalar_one_or_none()
+    if folder_id is None:
+        logger.error(f"Image missing {image_path}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Image missing {image_path}")
+    return folder_id
+
+# 根据vgg16特征向量
+async def vgg16_image_feature_vector(image_collection:List[str],config_file:str,db:AsyncSession):
+    """
+    将vgg16模型获取的特征向量存放到目录中，目录格式如下：
+    |- vector # 根目录
+      |- model # 获取特征向量的模型名称
+        |- folder_id # image_path对应的目录的id
+          |- image_name.npy # 存放的特长向量
+          |- ...
+
+    Args:
+        image_collection: 图片集合
+        config_file: 配置文件路径
+        db: 数据库
+    """
+    # 登录配置文件
+    config=inquiry.load_config(config_file=config_file)
+    # 获取特征向量存放的目录
+    vector_dir=config["vector_dir"]
+    # 特征向量存放目录下的模型目录
+    model_dir="vgg16"
     feature_extract = vgg16_feature_extraction.Vgg16FeatureExtractor(config_path="./config/config.yml")
-    image_collection_dateset=data_collection.VggDataset(image_collection=image_collection,need_transform=True)
+    # 设备选择
+    device = feature_extract.device
+    # 目录路径构建
+    random_image_path=random.choice(image_collection)
+    folder_id=await image_path_to_folder_id(image_path=random_image_path,db=db)
+    base_dir=Path(__file__).parent.parent
+    save_dir=base_dir.joinpath(vector_dir,model_dir,f"{folder_id}")
+    # 如果目录不存在，直接获取特征向量
+    if not save_dir.exists():
+        save_dir.mkdir(parents=True)
+        image_collection_dateset=data_collection.VggDataset(image_collection=image_collection,need_transform=True)
+    else:
+        # TODO 比较save_dir里面的路径，只加载新加入图片的特征向量
+        pass
+    # 获取target的张量
+    # target_dataset=data_collection.VggDataset(image_collection=[target_image],need_transform=True)
+    # target_date=target_dataset[0][1]
+    # target_date=target_date.unsqueeze(dim=0)
+    # 模型登录
     vgg16=feature_extract.load_vgg16()
     module=data_collection.FeatureStripping(base_model=vgg16)
+    # 转化为测试模式
+    module.eval()
+    # 获取target的特征矩阵
+    # with torch.no_grad():
+    #     target_feature_vector=module(target_date)
+    #     target_feature_vector=F.normalize(target_feature_vector,dim=1,p=2).squeeze(0)
+    path_vector=list()
     image_collection_dataloader=data.DataLoader(
         dataset=image_collection_dateset,
         batch_size=16,
         num_workers=2,
     )
+    for image_paths, images in image_collection_dataloader:
+        images=images.to(device=device)
+        module=module.to(device=device)
+        with (torch.no_grad()):
+            feature_vectors=module(images)
+            for image_path,vector in zip(image_paths,feature_vectors):
+                # similarity=vgg16_feature_extraction.cosine_similarity(target=target_feature_vector,feature=vector)
+                path_vector.append((image_path,vector.cpu().numpy()))
+    # path_similarity=sorted(path_similarity,key=lambda item:path_similarity[item],reverse=True)
+    for item in path_vector:
+        file_name=Path(item[0]).name
+        vector=item[1]
+        save_path=save_dir.joinpath(f"{file_name}.npy")
+        np.save(file=save_path,arr=vector)
