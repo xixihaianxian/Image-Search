@@ -280,7 +280,7 @@ async def fetch_images(folder:str,page:int,page_size:int,db:AsyncSession):
         return None
     return images
 
-async def image_path_to_folder_id(image_path:str,db:AsyncSession):
+async def image_path_to_folder_id(image_path:str,db:AsyncSession)->int:
     """
     Args:
         image_path: 图片路径
@@ -299,8 +299,33 @@ async def image_path_to_folder_id(image_path:str,db:AsyncSession):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Image missing {image_path}")
     return folder_id
 
+# 根据目录id获取目录路径
+async def folder_id_to_path(folder_id:int,db:AsyncSession):
+    stmt=select(
+        retrieve_model.Folders.folder_path
+    ).where(
+        retrieve_model.Folders.id == folder_id
+    )
+    result=await db.execute(statement=stmt)
+    folder_path=result.scalar_one_or_none()
+    if folder_path is None:
+        logger.error(f"Folder missing {folder_id}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail="Folder missing {folder_id}")
+    return folder_path
+
+# 获取目录中所有的图片
+async def fetch_image_collection(folder_id:int,db:AsyncSession):
+    stmt=select(
+        retrieve_model.Images.path
+    ).where(
+        retrieve_model.Images.folder_id == folder_id
+    )
+    result=await db.execute(stmt)
+    image_collection=result.scalars().all()
+    return image_collection
+
 # 根据vgg16特征向量
-async def vgg16_image_feature_vector(image_collection:List[str],config_file:str,db:AsyncSession):
+async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSession):
     """
     将vgg16模型获取的特征向量存放到目录中，目录格式如下：
     |- vector # 根目录
@@ -310,7 +335,7 @@ async def vgg16_image_feature_vector(image_collection:List[str],config_file:str,
           |- ...
 
     Args:
-        image_collection: 图片集合
+        image_path: 随机一张集合里面的图片
         config_file: 配置文件路径
         db: 数据库
     """
@@ -323,18 +348,39 @@ async def vgg16_image_feature_vector(image_collection:List[str],config_file:str,
     feature_extract = vgg16_feature_extraction.Vgg16FeatureExtractor(config_path="./config/config.yml")
     # 设备选择
     device = feature_extract.device
-    # 目录路径构建
-    random_image_path=random.choice(image_collection)
+    random_image_path=image_path
     folder_id=await image_path_to_folder_id(image_path=random_image_path,db=db)
+    # 获取image_collection
+    image_collection=await fetch_image_collection(folder_id=folder_id,db=db)
+    # 目录路径构建
+    folder_path=await folder_id_to_path(folder_id=folder_id,db=db)
     base_dir=Path(__file__).parent.parent
     save_dir=base_dir.joinpath(vector_dir,model_dir,f"{folder_id}")
     # 如果目录不存在，直接获取特征向量
     if not save_dir.exists():
         save_dir.mkdir(parents=True)
-        image_collection_dateset=data_collection.VggDataset(image_collection=image_collection,need_transform=True)
+        images_to_process=image_collection
     else:
-        # TODO 比较save_dir里面的路径，只加载新加入图片的特征向量
-        pass
+        # 比较save_dir里面的路径，只加载新加入图片的特征向量
+        existing_files = set()
+        for file_npy in save_dir.rglob("*.npy"):
+            relative_name = file_npy.stem  # 获取不带扩展名的文件名
+            existing_files.add(relative_name)
+        # 构建需要处理的图片列表
+        images_to_process = list()
+        for image_path in image_collection:
+            # 获取相对于folder_path的图片文件路径
+            relative_path = os.path.relpath(image_path, folder_path)
+            # 去掉扩展名，与已存在的文件比较
+            relative_name = os.path.splitext(relative_path)[0]
+            # 如果该图片还没有对应的特征向量文件，加入处理列表
+            if relative_name not in existing_files:
+                images_to_process.append(image_path)
+        # 没有需要处理的图片
+        if not images_to_process:
+            logger.info(f"No updates")
+            return
+    image_collection_dateset = data_collection.VggDataset(image_collection=images_to_process, need_transform=True)
     # 获取target的张量
     # target_dataset=data_collection.VggDataset(image_collection=[target_image],need_transform=True)
     # target_date=target_dataset[0][1]
@@ -364,7 +410,9 @@ async def vgg16_image_feature_vector(image_collection:List[str],config_file:str,
                 path_vector.append((image_path,vector.cpu().numpy()))
     # path_similarity=sorted(path_similarity,key=lambda item:path_similarity[item],reverse=True)
     for item in path_vector:
-        file_name=Path(item[0]).name
+        relative_path = os.path.relpath(item[0],folder_path)
         vector=item[1]
-        save_path=save_dir.joinpath(f"{file_name}.npy")
+        file_name=os.path.splitext(relative_path)[0]+".npy"
+        save_path=save_dir.joinpath(file_name)
+        save_path.parent.mkdir(parents=True,exist_ok=True)
         np.save(file=save_path,arr=vector)

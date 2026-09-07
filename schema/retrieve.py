@@ -38,7 +38,8 @@ class DetailImageInfo(BaseModel):
 
 class ImageCollection(BaseModel):
     target_image:str=Field(validation_alias="targetImage",serialization_alias="targetImage")
-    image_album:List[str]=Field(validation_alias="imageAlbum",serialization_alias="imageAlbum")
+    # image_album:List[str]=Field(validation_alias="imageAlbum",serialization_alias="imageAlbum")
+    image_path:str=Field(validation_alias="imagePath",serialization_alias="imagePath")
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True
