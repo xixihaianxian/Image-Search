@@ -324,7 +324,16 @@ async def fetch_image_collection(folder_id:int,db:AsyncSession):
     image_collection=result.scalars().all()
     return image_collection
 
-# 根据vgg16特征向量
+async def insert_dat_(dataset:List,db:AsyncSession):
+    try:
+        db.add_all(dataset)
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Insert data error !")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Insert data error !")
+
+# 保存vgg16特征向量
 async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSession):
     """
     将vgg16模型获取的特征向量存放到目录中，目录格式如下：
@@ -341,11 +350,13 @@ async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSess
     """
     # 登录配置文件
     config=inquiry.load_config(config_file=config_file)
+    # 存放需要插入的数据
+    images_feature=list()
     # 获取特征向量存放的目录
     vector_dir=config["vector_dir"]
     # 特征向量存放目录下的模型目录
     model_dir="vgg16"
-    feature_extract = vgg16_feature_extraction.Vgg16FeatureExtractor(config_path="./config/config.yml")
+    feature_extract = vgg16_feature_extraction.Vgg16FeatureExtractor(config_path=config_file)
     # 设备选择
     device = feature_extract.device
     random_image_path=image_path
@@ -416,3 +427,82 @@ async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSess
         save_path=save_dir.joinpath(file_name)
         save_path.parent.mkdir(parents=True,exist_ok=True)
         np.save(file=save_path,arr=vector)
+        images_feature.append(
+            retrieve_model.ImageFeatures(
+                model="vgg16",
+                path=item[0],
+                feature=str(save_path)
+            )
+        )
+    # 保存feature数据
+    await insert_dat_(dataset=images_feature,db=db)
+
+# 效率低的搜索方法
+async def search_image(target_image:str,image_path:str,config_file:str,db:AsyncSession,method:str,page_size:int,page:int):
+    config=inquiry.load_config(config_file=config_file)
+    vector_dir=config["vector_dir"]
+    folder_id=await image_path_to_folder_id(image_path=image_path,db=db)
+    base_dir=Path(__file__).parent.parent
+    save_dir=base_dir.joinpath(vector_dir,method,f"{folder_id}")
+    feature_extract = vgg16_feature_extraction.Vgg16FeatureExtractor(config_path=config_file)
+    device = feature_extract.device
+    vgg16=feature_extract.load_vgg16()
+    module=data_collection.FeatureStripping(base_model=vgg16)
+    module.eval()
+    target_image_dateset=data_collection.VggDataset([target_image],need_transform=True)
+    _,target_image=target_image_dateset[0]
+    target_image=target_image.unsqueeze(0)
+    with torch.no_grad():
+        module=module.to(device=device)
+        target_image=target_image.to(device=device)
+        target_feature=module(target_image)
+    target_feature=target_feature.squeeze(0).cup().numpy()
+    file_and_feature=list()
+    for item in save_dir.rglob("*.npy"):
+        file_and_feature.append(
+            (
+                item, # 特征向量路径
+                np.load(file=item)
+            )
+        )
+    file_and_similarity=list(
+        map(
+            lambda item: (item[0], vgg16_feature_extraction.array_cosine_similarity(target_feature, item[1])),
+            file_and_feature,
+        )
+    )
+    start = (page - 1) * page_size
+    end = start + page_size
+    file_and_similarity_part=file_and_similarity[start:end]
+    stmt=(select(
+        retrieve_model.ImageFeatures.feature,
+        retrieve_model.Images.path,
+        retrieve_model.Images.thumbnail_path
+    ).join(
+        retrieve_model.ImageFeatures,
+        retrieve_model.Images.path == retrieve_model.ImageFeatures.path,
+    ).where(
+        retrieve_model.ImageFeatures.feature.in_(
+            list(
+                map(lambda item: str(item[0]),file_and_similarity_part),
+            )
+        )
+    ))
+    result=await db.execute(stmt)
+    paths=result.all()
+    path_map = {
+        feature: (image_path, thumbnail_path)
+        for feature, image_path, thumbnail_path in paths
+    }
+    result=list()
+    for feature_file, similarity in file_and_similarity_part:
+        result.append(
+            {
+                "feature":feature_file,
+                "thumbnail":path_map[feature_file][1],
+                "image":path_map[feature_file][0],
+                "similarity":similarity,
+            }
+        )
+    result=sorted(result,key=lambda item: item["simlarity"],reverse=True)
+    return result

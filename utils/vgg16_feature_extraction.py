@@ -11,10 +11,18 @@ from pathlib import Path
 from torch.nn import functional as F
 
 # 余弦相似度计算
-def cosine_similarity(target,feature):
+def cosine_similarity(target:torch.Tensor,feature:torch.Tensor):
     dot_result=torch.dot(target,feature)
     target_length=torch.linalg.norm(target,ord=2)
     feature_length=torch.linalg.norm(feature,ord=2)
+    similarity=dot_result/(feature_length*target_length)
+    return similarity.item()
+
+# 数组计算余弦相似度
+def array_cosine_similarity(target:np.ndarray,feature:np.ndarray):
+    dot_result=np.dot(target,feature)
+    target_length=np.linalg.norm(target,ord=2)
+    feature_length=np.linalg.norm(feature,ord=2)
     similarity=dot_result/(feature_length*target_length)
     return similarity
 
