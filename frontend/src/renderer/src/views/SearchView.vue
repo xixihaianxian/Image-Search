@@ -1,9 +1,56 @@
 <script setup>
-import { onBeforeUnmount, ref, nextTick } from 'vue'
-import { uploadLocalGallery, displayGallery, resolveImageUrl, selectTarget } from '../api'
+import { onBeforeUnmount, onMounted, ref, nextTick } from 'vue'
+import { uploadLocalGallery, displayGallery, displayModels, generateFeatures, resolveImageUrl, selectTarget, slowSearchImages } from '../api'
 
 // ---------- 工具栏收起/展开 ----------
 const toolbarCollapsed = ref(false)
+
+// ---------- 特征方法 ----------
+const featureMethods = ref([])
+const selectedFeatureMethod = ref('vgg16')
+const featureMenuOpen = ref(false)
+const featureToolEl = ref(null)
+const featureMethodsLoading = ref(false)
+const featureMethodsError = ref('')
+
+async function toggleFeatureMenu() {
+  featureMenuOpen.value = !featureMenuOpen.value
+  if (!featureMenuOpen.value) return
+
+  featureMethodsLoading.value = true
+  featureMethodsError.value = ''
+  try {
+    const models = await displayModels()
+    featureMethods.value = models.map(model => ({
+      id: model.toLowerCase(),
+      name: model.toUpperCase(),
+      description: model.toLowerCase() === 'vgg16' ? '通用图像特征' : '后端已注册的方法',
+    }))
+    if (featureMethods.value.length && !featureMethods.value.some(method => method.id === selectedFeatureMethod.value)) {
+      selectedFeatureMethod.value = featureMethods.value[0].id
+    }
+  } catch (error) {
+    featureMethodsError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    featureMethodsLoading.value = false
+  }
+}
+
+function selectFeatureMethod(method) {
+  selectedFeatureMethod.value = method.id
+  featureMenuOpen.value = false
+  showToast(`已选择 ${method.name}`)
+}
+
+function closeFeatureMenuOnOutsideClick(event) {
+  if (featureToolEl.value && !featureToolEl.value.contains(event.target)) {
+    featureMenuOpen.value = false
+  }
+}
+
+function closeFeatureMenuOnEscape(event) {
+  if (event.key === 'Escape') featureMenuOpen.value = false
+}
 
 function toggleToolbar() {
   toolbarCollapsed.value = !toolbarCollapsed.value
@@ -171,10 +218,44 @@ async function ctxDownload() {
 }
 
 // ---------- 开始搜索 ----------
-function startSearch() {
-  if (!queryImage.value) return
-  // TODO: 待后端提供以图搜图接口后，在此上传查询图片并渲染检索结果
-  showToast('后端检索接口尚未接入，敬请期待')
+const searchResults = ref([])
+const searchLoading = ref(false)
+const searchError = ref('')
+
+async function startSearch() {
+  if (!queryImage.value?.path) {
+    showToast('请选择可读取本地路径的查询图片')
+    return
+  }
+  if (!galleryFolder.value || !galleryImages.value[0]?.path) {
+    showToast('请先选择含图片的图片库目录')
+    return
+  }
+
+  const payload = {
+    targetImage: queryImage.value.path,
+    imagePath: galleryImages.value[0].path,
+    method: selectedFeatureMethod.value,
+  }
+  searchLoading.value = true
+  searchError.value = ''
+  searchResults.value = []
+  try {
+    await generateFeatures(payload)
+    const results = await slowSearchImages(payload)
+    searchResults.value = results.map(item => ({
+      name: item.name || item.image?.split(/[\\/]/).pop() || '图片',
+      extension: item.extension || '',
+      path: item.image,
+      url: resolveImageUrl(item.thumbnail),
+      similarity: item.similarity,
+    }))
+    showToast(`已找到 ${searchResults.value.length} 张相似图片`)
+  } catch (error) {
+    searchError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    searchLoading.value = false
+  }
 }
 
 // ---------- 轻提示 ----------
@@ -194,6 +275,13 @@ function showToast(message) {
 onBeforeUnmount(() => {
   if (queryObjectUrl) URL.revokeObjectURL(queryObjectUrl)
   clearTimeout(toastTimer)
+  document.removeEventListener('click', closeFeatureMenuOnOutsideClick)
+  window.removeEventListener('keydown', closeFeatureMenuOnEscape)
+})
+
+onMounted(() => {
+  document.addEventListener('click', closeFeatureMenuOnOutsideClick)
+  window.addEventListener('keydown', closeFeatureMenuOnEscape)
 })
 
 // ---------- 本地图库（原生目录选择 + 无限滚动分页） ----------
@@ -292,6 +380,7 @@ function onGridScroll(event) {
     </header>
     <!-- 左侧工具栏 -->
     <aside class="toolbar" :class="{ 'toolbar--collapsed': toolbarCollapsed }">
+      <span v-show="!toolbarCollapsed" class="toolbar__label">工具栏</span>
       <button
         class="toolbar__back"
         type="button"
@@ -302,7 +391,52 @@ function onGridScroll(event) {
           <path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
-      <span v-show="!toolbarCollapsed" class="toolbar__label">工具栏</span>
+      <div ref="featureToolEl" class="toolbar__feature-tool">
+        <button
+          class="toolbar__feature-button"
+          :class="{ 'toolbar__feature-button--active': featureMenuOpen }"
+          type="button"
+          :title="`方法：${featureMethods.find(method => method.id === selectedFeatureMethod)?.name || selectedFeatureMethod.toUpperCase()}`"
+          :aria-expanded="featureMenuOpen"
+          aria-controls="feature-method-menu"
+          @click="toggleFeatureMenu"
+        >
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true">
+            <circle cx="6" cy="7" r="2.2" stroke="currentColor" stroke-width="1.8" />
+            <circle cx="18" cy="6" r="2.2" stroke="currentColor" stroke-width="1.8" />
+            <circle cx="12" cy="18" r="2.2" stroke="currentColor" stroke-width="1.8" />
+            <path d="m7.8 8.2 2.7 7M16 7.6l-2.7 8M8.1 7.1l7.7-.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+          <span v-show="!toolbarCollapsed" class="toolbar__feature-text">方法</span>
+        </button>
+        <Transition name="feature-menu">
+          <section
+            v-if="featureMenuOpen"
+            id="feature-method-menu"
+            class="feature-menu"
+            aria-label="方法"
+          >
+            <p class="feature-menu__title">方法</p>
+            <p v-if="featureMethodsLoading" class="feature-menu__status">正在获取方法…</p>
+            <p v-else-if="featureMethodsError" class="feature-menu__status feature-menu__status--error">{{ featureMethodsError }}</p>
+            <p v-else-if="!featureMethods.length" class="feature-menu__status">暂未注册可用方法</p>
+            <button
+              v-else
+              v-for="method in featureMethods"
+              :key="method.id"
+              class="feature-menu__option"
+              :class="{ 'feature-menu__option--selected': selectedFeatureMethod === method.id }"
+              type="button"
+              @click="selectFeatureMethod(method)"
+            >
+              <span><strong>{{ method.name }}</strong><small>{{ method.description }}</small></span>
+              <svg v-if="selectedFeatureMethod === method.id" viewBox="0 0 24 24" width="17" height="17" fill="none" aria-label="已选择">
+                <path d="m5 12 4.2 4.2L19 6.8" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </section>
+        </Transition>
+      </div>
     </aside>
 
     <!-- 主体两栏 -->
@@ -360,7 +494,7 @@ function onGridScroll(event) {
             class="pill-btn pill-btn--primary"
             type="button"
             title="上传查询图片后开始检索"
-            :disabled="!queryImage"
+            :disabled="!queryImage || searchLoading"
             @click="startSearch"
           >
             开 始 搜 索
@@ -371,22 +505,32 @@ function onGridScroll(event) {
       <!-- 右：检索结果 -->
       <section class="panel-col panel-col--results">
         <div class="card result-card">
-          <div v-if="galleryImages.length" class="result-card__heading">
+          <div v-if="searchResults.length || galleryImages.length" class="result-card__heading">
             <div>
-              <p class="result-card__eyebrow">COLLECTION</p>
-              <h2>图库预览</h2>
+              <p class="result-card__eyebrow">{{ searchResults.length ? 'SEARCH RESULTS' : 'COLLECTION' }}</p>
+              <h2>{{ searchResults.length ? '相似图片' : '图库预览' }}</h2>
             </div>
-            <span class="result-card__count">共 {{ galleryImages.length }} 张</span>
+            <span class="result-card__count">共 {{ searchResults.length || galleryImages.length }} 张</span>
           </div>
 
           <!-- 加载中 -->
-          <div v-if="galleryLoading" class="card-empty">
+          <div v-if="galleryLoading || searchLoading" class="card-empty">
             <span class="spinner" aria-hidden="true"></span>
             <p>正在扫描目录…</p>
           </div>
 
           <!-- 出错 -->
-          <div v-else-if="galleryError" class="result-error">{{ galleryError }}</div>
+          <div v-else-if="galleryError || searchError" class="result-error">{{ searchError || galleryError }}</div>
+
+          <div v-else-if="searchResults.length" class="result-grid">
+            <figure v-for="item in searchResults" :key="item.path" class="result-item">
+              <img :src="item.url" :alt="item.name" :title="item.name" loading="lazy" @contextmenu="openGalleryMenu($event, item)" />
+              <figcaption>
+                <span :title="item.name">{{ item.name }}</span>
+                <small>{{ item.extension }} · {{ (item.similarity * 100).toFixed(1) }}%</small>
+              </figcaption>
+            </figure>
+          </div>
 
           <!-- 图库网格 -->
           <div v-else-if="galleryImages.length" ref="gridEl" class="result-grid" @scroll="onGridScroll">
@@ -508,6 +652,8 @@ function onGridScroll(event) {
 
 /* ---------- 工具栏 ---------- */
 .toolbar {
+  position: relative;
+  z-index: 30;
   grid-row: 1 / -1;
   display: flex;
   flex-direction: column;
@@ -564,13 +710,120 @@ function onGridScroll(event) {
 }
 
 .toolbar__label {
-  margin-top: 0.4rem;
+  order: -1;
+  margin: 0 0 0.25rem;
   writing-mode: vertical-rl;
   font-size: 0.8rem;
   letter-spacing: 0.5em;
   color: var(--color-text-muted);
   user-select: none;
 }
+
+.toolbar__feature-tool {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.toolbar__feature-button {
+  display: flex;
+  flex-direction: column;
+  place-items: center;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: 2.5rem;
+  min-height: 2.5rem;
+  padding: 0.3rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
+  background: var(--color-card);
+  color: var(--color-text-secondary);
+  transition: transform 0.2s ease, border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
+}
+
+.toolbar__feature-button:hover,
+.toolbar__feature-button--active {
+  border-color: var(--color-accent-light);
+  background: rgba(255, 253, 248, 0.96);
+  color: var(--color-accent);
+}
+
+.toolbar__feature-button:hover { transform: translateY(-1px); }
+.toolbar__feature-button:focus-visible,
+.feature-menu__option:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.toolbar__feature-text {
+  font-size: 0.62rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.feature-menu {
+  position: absolute;
+  top: -0.35rem;
+  left: calc(100% + 0.75rem);
+  z-index: 100;
+  width: 14.5rem;
+  padding: 0.55rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
+  background: rgba(255, 253, 248, 0.97);
+  box-shadow: 0 16px 38px rgba(74, 63, 53, 0.18);
+  backdrop-filter: blur(10px);
+}
+
+.feature-menu__title {
+  margin: 0.15rem 0.45rem 0.45rem;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.15em;
+}
+
+.feature-menu__status {
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.feature-menu__status--error { color: var(--color-danger); }
+
+.feature-menu__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sketchy);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  transition: background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.feature-menu__option:hover,
+.feature-menu__option--selected {
+  border-color: var(--color-border);
+  background: rgba(227, 165, 177, 0.14);
+}
+
+.feature-menu__option strong,
+.feature-menu__option small { display: block; }
+.feature-menu__option strong { font-size: 0.9rem; font-weight: 600; }
+.feature-menu__option small { margin-top: 0.16rem; color: var(--color-text-muted); font-size: 0.7rem; }
+.feature-menu__option svg { flex: 0 0 auto; color: var(--color-accent); }
+
+.feature-menu-enter-active,
+.feature-menu-leave-active { transition: opacity 0.16s ease, transform 0.16s ease; }
+.feature-menu-enter-from,
+.feature-menu-leave-to { opacity: 0; transform: translateX(-0.4rem) scale(0.98); }
 
 /* ---------- 主体两栏 ---------- */
 .content {
@@ -903,12 +1156,23 @@ function onGridScroll(event) {
 }
 
 .result-item figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 0.14rem;
   padding: 0.45rem 0.65rem;
-  overflow: hidden;
   color: var(--color-text-secondary);
   font-size: 0.72rem;
+}
+
+.result-item figcaption > span {
+  overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.result-item figcaption small {
+  color: var(--color-accent-deep);
+  font-size: 0.65rem;
 }
 
 /* 网格底部加载状态条 */
@@ -1116,6 +1380,21 @@ function onGridScroll(event) {
     width: auto;
     padding: 0.5rem 1rem;
   }
+
+  .toolbar__feature-button {
+    flex-direction: row;
+    width: auto;
+    min-height: 2.3rem;
+    padding-inline: 0.65rem;
+  }
+
+  .feature-menu {
+    top: calc(100% + 0.65rem);
+    left: 0;
+  }
+
+  .feature-menu-enter-from,
+  .feature-menu-leave-to { transform: translateY(-0.35rem) scale(0.98); }
 
   .toolbar__label {
     margin-top: 0;

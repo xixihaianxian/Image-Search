@@ -5,3 +5,6 @@ upload/*
 database/image_search.sql
 
 .env
+
+# 特征向量目录
+vector/*

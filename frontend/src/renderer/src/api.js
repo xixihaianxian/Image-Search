@@ -76,6 +76,66 @@ export function resolveImageUrl(imageUrl) {
 }
 
 /**
+ * 获取后端已注册的特征方法列表。
+ * @returns {Promise<string[]>}
+ */
+export async function displayModels() {
+  let response
+  try {
+    response = await fetch(`${API_BASE}/retrieve/display/model`)
+  } catch {
+    throw new Error('无法连接后端，暂时不能获取方法列表')
+  }
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+    } catch {
+      /* 使用默认错误信息 */
+    }
+    throw new Error(`获取方法列表失败：${detail}`)
+  }
+  const result = await response.json()
+  const data = typeof result?.data === 'string' ? JSON.parse(result.data) : result?.data
+  return Array.isArray(data) ? data.filter(method => typeof method === 'string') : []
+}
+
+async function requestSearchEndpoint(path, payload, action) {
+  let response
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    throw new Error(`无法连接后端，${action}未完成`)
+  }
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+    } catch {
+      /* 使用默认错误信息 */
+    }
+    throw new Error(`${action}失败：${detail}`)
+  }
+  const result = await response.json()
+  return typeof result?.data === 'string' ? JSON.parse(result.data) : result?.data
+}
+
+export function generateFeatures(payload) {
+  return requestSearchEndpoint('/retrieve/generate/features', payload, '生成特征')
+}
+
+export async function slowSearchImages(payload) {
+  const data = await requestSearchEndpoint('/retrieve/slow/search/images', payload, '搜索图片')
+  return Array.isArray(data) ? data : []
+}
+
+/**
  * 登记选中的目标图片，后端返回其展示信息
  * @param {string} imagePath 选中图片的绝对路径
  * @returns {Promise<{name:string, imageUrl:string}>}

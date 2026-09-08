@@ -96,3 +96,8 @@ class ImageFeatures(BaseModel):
             name="model_path_unique"
         ),
     )
+
+class Models(BaseModel):
+    __tablename__ = "models"
+    id:Mapped[int]=mapped_column(INTEGER,primary_key=True,autoincrement=True)
+    model:Mapped[str]=mapped_column(TEXT,nullable=False,unique=True)

@@ -1,4 +1,4 @@
-from fastapi import APIRouter,UploadFile,File,Form,Depends
+from fastapi import APIRouter,UploadFile,File,Form,Depends,HTTPException,status
 from schema import retrieve as schema_retrieve, response as schema_response
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -82,8 +82,44 @@ async def select_target(image_path:str):
         data=image_info,
     )
 
+# 模型展示
+@router.get("/display/model")
+async def display_model(db:AsyncSession=Depends(database_contrl.get_db)):
+    models=await crud_retrieve.fetch_model(db=db)
+    return schema_response.success_response(
+        message="success",
+        data=models,
+    )
+
 # 搜索图片
-@router.post("/search/images")
-async def search_images(image_collection:schema_retrieve.ImageCollection,db:AsyncSession=Depends(database_contrl.get_db())):
-    target_image=image_collection.target_image
+@router.post("/generate/features")
+async def generate_features(image_collection:schema_retrieve.ImageCollection,db:AsyncSession=Depends(database_contrl.get_db)):
+    config_file=Path(__file__).parent.parent.joinpath("config","config.yml")
     image_path=image_collection.image_path
+    method=image_collection.method.lower()
+    if method != "vgg16":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported method: {method}")
+    await crud_retrieve.vgg16_image_feature_vector(image_path=image_path,config_file=config_file,db=db)
+    return schema_response.success_response(
+        message="success"
+    )
+
+@router.post("/slow/search/images")
+async def slow_search_images(image_collection:schema_retrieve.ImageCollection,db:AsyncSession=Depends(database_contrl.get_db)):
+    target_image=image_collection.target_image
+    method=image_collection.method.lower()
+    if method != "vgg16":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported method: {method}")
+    image_path=image_collection.image_path
+    config_file=Path(__file__).parent.parent.joinpath("config","config.yml")
+    result=await crud_retrieve.slow_search_images(
+        target_image=target_image,
+        image_path=image_path,
+        method=method,
+        db=db,
+        config_file=config_file
+    )
+    return schema_response.success_response(
+        message="success",
+        data=result,
+    )

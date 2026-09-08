@@ -24,7 +24,7 @@ def array_cosine_similarity(target:np.ndarray,feature:np.ndarray):
     target_length=np.linalg.norm(target,ord=2)
     feature_length=np.linalg.norm(feature,ord=2)
     similarity=dot_result/(feature_length*target_length)
-    return similarity
+    return float(similarity)
 
 def load_config(config_file:Optional[str]):
     """登录yaml配置文件

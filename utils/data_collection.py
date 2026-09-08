@@ -3,7 +3,7 @@ from torch.utils import data
 from pathlib import Path
 from typing import List,Tuple
 from torchvision import transforms
-import vgg16_feature_extraction
+from . import vgg16_feature_extraction
 import numpy as np
 from PIL import Image
 from torch import nn
