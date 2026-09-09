@@ -51,7 +51,7 @@ class FeatureStripping(vgg16_feature_extraction.FeatureModule):
         result=self.avgpool_1x1(feature)
         # (batch_size,channels)
         result=self.flatten(result)
-        # normalize
+        # normalize，归一化操作
         result=F.normalize(result,dim=1,p=2)
         return result
 

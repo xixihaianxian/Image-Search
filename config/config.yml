@@ -34,3 +34,7 @@ page_size: 20
 
 # 存放特征向量的目录
 vector_dir: "vector"
+
+# clip模型权重地址
+open_clip_weight: "module/open_clip_model.safetensors"
+model_tag: "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"

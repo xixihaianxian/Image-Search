@@ -12,7 +12,10 @@ from torch.nn import functional as F
 
 # 余弦相似度计算
 def cosine_similarity(target:torch.Tensor,feature:torch.Tensor):
-    dot_result=torch.dot(target,feature)
+    if target.dim()<2:
+        dot_result=torch.dot(target,feature)
+    else:
+        dot_result=torch.matmul(target,feature)
     target_length=torch.linalg.norm(target,ord=2)
     feature_length=torch.linalg.norm(feature,ord=2)
     similarity=dot_result/(feature_length*target_length)

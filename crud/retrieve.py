@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 import os
 from uuid import uuid4
-from utils import vgg16_feature_extraction,data_collection
+from utils import vgg16_feature_extraction,data_collection,openclip_feature_extraction
 from torch.utils import data
 import torch
 from torch.nn import functional as F
@@ -375,30 +375,9 @@ async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSess
     folder_path=await folder_id_to_path(folder_id=folder_id,db=db)
     base_dir=Path(__file__).parent.parent
     save_dir=base_dir.joinpath(vector_dir,model_dir,f"{folder_id}")
-    # 如果目录不存在，直接获取特征向量
-    if not save_dir.exists():
-        save_dir.mkdir(parents=True)
-        images_to_process=image_collection
-    else:
-        # 比较save_dir里面的路径，只加载新加入图片的特征向量
-        existing_files = set()
-        for file_npy in save_dir.rglob("*.npy"):
-            relative_name = file_npy.stem  # 获取不带扩展名的文件名
-            existing_files.add(relative_name)
-        # 构建需要处理的图片列表
-        images_to_process = list()
-        for image_path in image_collection:
-            # 获取相对于folder_path的图片文件路径
-            relative_path = os.path.relpath(image_path, folder_path)
-            # 去掉扩展名，与已存在的文件比较
-            relative_name = os.path.splitext(relative_path)[0]
-            # 如果该图片还没有对应的特征向量文件，加入处理列表
-            if relative_name not in existing_files:
-                images_to_process.append(image_path)
-        # 没有需要处理的图片
-        if not images_to_process:
-            logger.info(f"No updates")
-            return
+    images_to_process=await _select_update_or_insert(save_dir=save_dir,images=image_collection,folder=folder_path)
+    if not images_to_process:
+        return
     image_collection_dateset = data_collection.VggDataset(image_collection=images_to_process, need_transform=True)
     # 获取target的张量
     # target_dataset=data_collection.VggDataset(image_collection=[target_image],need_transform=True)
@@ -431,7 +410,9 @@ async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSess
     for item in path_vector:
         relative_path = os.path.relpath(item[0],folder_path)
         vector=item[1]
-        file_name=os.path.splitext(relative_path)[0]+".npy"
+        # 修改npy命名方法，***.npy->***.jpg.npy
+        # file_name=os.path.splitext(relative_path)[0]+".npy"
+        file_name=relative_path+".npy"
         save_path=save_dir.joinpath(file_name)
         save_path.parent.mkdir(parents=True,exist_ok=True)
         np.save(file=save_path,arr=vector)
@@ -444,6 +425,69 @@ async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSess
         )
     # 保存feature数据
     await insert_dat_(dataset=images_feature,db=db)
+
+async def batch_insert_feature(imag_features:torch.Tensor,image_paths:List,folder_path:str,db:AsyncSession):
+    if imag_features.dim()<2:
+        logger.error(f"Incorrect feature data dimension!")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Incorrect feature data dimension!")
+
+async def _select_update_or_insert(save_dir:Path,images:List[str],folder:str)->List[str]:
+    """目录不存在，表示数据从未插入过，直接全部插入
+    Args:
+        save_dir: 保存特征向量的目录
+        images: 图片路径列表
+        folder: 图片目录
+    Returns:
+        过滤之后的目录
+    """
+    # update or insert
+    if not save_dir.exists():
+        save_dir.mkdir(parents=True)
+        images_to_process=images
+    else:
+        # 获取已经存在的图片
+        existing_files = set()
+        for file_npy in save_dir.rglob("*.npy"):
+            # file_npy save dir/***/**.jpg.npy
+            relative_name = file_npy.relative_to(save_dir) # relative_name: ***/**.jpg.npy
+            relative_name = relative_name.with_suffix("") # relative_name: ***/**.jpg
+            existing_files.add(str(relative_name)) # existing_files: [***/**.jpg,...]
+        images_to_process = list()
+        # 判断是否有需要更新的文件
+        for image_path in images:
+            # image_path: folder/***/**.jpg
+            relative_path=os.path.relpath(image_path,folder) # relative_path: ***/**.jpg
+            # relative_name=os.path.splitext(relative_path)[0]
+            if relative_path not in existing_files:
+                images_to_process.append(image_path)
+    return images_to_process
+
+# 使用clip获取特征向量
+async def openclip_image_feature_vector(image_path:str,config_file:str,db:AsyncSession):
+    config=inquiry.load_config(config_file=config_file)
+    # 获取图片列表
+    folder_id = await image_path_to_folder_id(image_path=image_path,db=db)
+    folder_path=await folder_id_to_path(folder_id=folder_id,db=db)
+    images = await fetch_image_collection(folder_id=folder_id,db=db)
+    # 登录模型
+    clip_model=openclip_feature_extraction.ClipModel(config=config)
+    # 设备
+    device=clip_model.device
+    model,preprocess=clip_model.load_clip_model()
+    model.eval()
+    model=model.to(device=device)
+    # 特征向量目录
+    vector_dir_name=config["vector_dir"]
+    vector_dir=Path(__file__).parent.parent.joinpath(vector_dir_name,"openclip",str(folder_id))
+    # 获取dataset
+    images_dataset = openclip_feature_extraction.ClipDataset(images=images,transform=preprocess)
+    images_dataloader = data.DataLoader(dataset=images_dataset,batch_size=16,num_workers=2)
+    with torch.no_grad(), torch.autocast(device_type=device.type):
+        for images, image_paths in images_dataloader:
+            images=images.to(device=device)
+            image_features=model.encode_image(images)
+            image_features=F.normalize(input=image_features,dim=-1,p=2)
+            # TODO 将数据插入到imagefeatures表中
 
 async def feature_by_image_path_form_vgg16(image_path:str,config_file:str)->np.ndarray:
     """
