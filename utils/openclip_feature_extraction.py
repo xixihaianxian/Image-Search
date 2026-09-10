@@ -6,6 +6,8 @@ from PIL import Image
 from torchvision import transforms
 from torch.utils import data
 from crud import inquiry
+from torch.nn import functional as F
+from loguru import logger
 
 class ClipModel:
     def __init__(self,config:Dict[str,Any]):
@@ -23,11 +25,17 @@ class ClipModel:
         else:
             self.device=torch.device(device)
     def load_clip_model(self):
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            model_name="ViT-B-32",
-            pretrained=str(self.weight),
-        )
-        return model,preprocess
+        try:
+            logger.info(f"Loding openclip ViT-B-32 model")
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                model_name="ViT-B-32",
+                pretrained=str(self.weight),
+            )
+            logger.info(f"ViT-B-32 model logged in successfully.")
+            return model, preprocess
+        except Exception as e:
+            logger.error(f"ViT-B-32 model not loaded.")
+            raise Exception(f"ViT-B-32 model not loaded.") from None
 
 class ClipDataset(data.Dataset):
     def __init__(self, images:List[str], transform:Optional[transforms.Compose]=None):
@@ -48,12 +56,18 @@ class ClipDataset(data.Dataset):
 
 if __name__=="__main__":
     config_file=Path(__file__).parent.parent.joinpath("config","config.yml")
+    images="E:/pythonProject/ImageSearch/static/ciocan.jpg"
     config=inquiry.load_config(config_file=config_file)
     clip_model=ClipModel(config=config)
+    device=clip_model.device
     model,preprocess=clip_model.load_clip_model()
-    images=["E:/pythonProject/ImageSearch/static/ciocan.jpg"]
-    clip_dateset=ClipDataset(images=images,transform=preprocess)
-    dataloader=data.DataLoader(clip_dateset,batch_size=2,shuffle=True,num_workers=2)
-    for images, image_paths in dataloader:
-        image_feature=model.encode_image(images)
-        print(image_paths)
+    model.eval()
+    model=model.to(device=device)
+    image=Image.open(images).convert("RGB")
+    image=preprocess(image).unsqueeze(0)
+    image=image.to(device=device)
+    with torch.no_grad(), torch.autocast(device_type=device.type):
+        image_feature=model.encode_image(image)
+        image_feature=F.normalize(input=image_feature,dim=-1,p=2)
+    image_feature=image_feature.squeeze(dim=0).cpu().numpy()
+    print(image_feature.shape)

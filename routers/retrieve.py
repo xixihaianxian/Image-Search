@@ -1,4 +1,4 @@
-from fastapi import APIRouter,UploadFile,File,Form,Depends,HTTPException,status
+from fastapi import APIRouter,UploadFile,File,Form,Depends,status
 from schema import retrieve as schema_retrieve, response as schema_response
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -7,6 +7,7 @@ from typing import List
 from utils import database_contrl
 from sqlalchemy.ext.asyncio import AsyncSession
 from urllib.parse import quote
+from fastapi.exceptions import HTTPException
 
 router = APIRouter(prefix="/retrieve",tags=["retrieve"])
 
@@ -97,9 +98,12 @@ async def generate_features(image_collection:schema_retrieve.ImageCollection,db:
     config_file=Path(__file__).parent.parent.joinpath("config","config.yml")
     image_path=image_collection.image_path
     method=image_collection.method.lower()
-    if method != "vgg16":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported method: {method}")
-    await crud_retrieve.vgg16_image_feature_vector(image_path=image_path,config_file=config_file,db=db)
+    if method == "vgg16":
+        await crud_retrieve.vgg16_image_feature_vector(image_path=image_path,config_file=config_file,db=db)
+    elif method == "openclip":
+        await crud_retrieve.openclip_image_feature_vector(image_path=image_path,config_file=config_file,db=db)
+    else:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unsupported method: {method}")
     return schema_response.success_response(
         message="success"
     )
@@ -108,8 +112,10 @@ async def generate_features(image_collection:schema_retrieve.ImageCollection,db:
 async def slow_search_images(image_collection:schema_retrieve.ImageCollection,db:AsyncSession=Depends(database_contrl.get_db)):
     target_image=image_collection.target_image
     method=image_collection.method.lower()
-    if method != "vgg16":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported method: {method}")
+    models=await crud_retrieve.fetch_models(db=db)
+    # 判断模型是否注册
+    if method not in models:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unsupported method: {method}")
     image_path=image_collection.image_path
     config_file=Path(__file__).parent.parent.joinpath("config","config.yml")
     result=await crud_retrieve.slow_search_images(
@@ -118,6 +124,29 @@ async def slow_search_images(image_collection:schema_retrieve.ImageCollection,db
         method=method,
         db=db,
         config_file=config_file
+    )
+    return schema_response.success_response(
+        message="success",
+        data=result,
+    )
+
+@router.post("/swift/search/images")
+async def swift_search_images(image_collection:schema_retrieve.ImageCollection,db:AsyncSession=Depends(database_contrl.get_db)):
+    target_image = image_collection.target_image
+    method = image_collection.method.lower()
+    top = image_collection.top
+    image_path=image_collection.image_path
+    models = await crud_retrieve.fetch_models(db=db)
+    if method not in models:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unsupported method: {method}")
+    config_file = Path(__file__).parent.parent.joinpath("config", "config.yml")
+    result=await crud_retrieve.swift_search_images(
+        target_image=target_image,
+        image_path=image_path,
+        config_file=config_file,
+        method=method,
+        top=top,
+        db=db
     )
     return schema_response.success_response(
         message="success",

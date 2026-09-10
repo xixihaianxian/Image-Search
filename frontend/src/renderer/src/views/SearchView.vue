@@ -1,6 +1,6 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, nextTick } from 'vue'
-import { uploadLocalGallery, displayGallery, displayModels, generateFeatures, resolveImageUrl, selectTarget, slowSearchImages } from '../api'
+import { uploadLocalGallery, displayGallery, displayModels, generateFeatures, resolveImageUrl, selectTarget, slowSearchImages, swiftSearchImages } from '../api'
 
 // ---------- 工具栏收起/展开 ----------
 const toolbarCollapsed = ref(false)
@@ -12,6 +12,38 @@ const featureMenuOpen = ref(false)
 const featureToolEl = ref(null)
 const featureMethodsLoading = ref(false)
 const featureMethodsError = ref('')
+
+// ---------- 搜索方式 ----------
+const searchModes = [
+  { id: 'slow', name: 'slow', description: '当前可用 · 全量相似度搜索' },
+  { id: 'swift', name: 'swift', description: '暂未接入 · FAISS 快速搜索' },
+]
+const selectedSearchMode = ref('slow')
+const searchMenuOpen = ref(false)
+const searchToolEl = ref(null)
+const searchTop = ref(20)
+const topAudio = new Audio('/audio/pyk-toon-n-n.mp3')
+topAudio.loop = false
+topAudio.volume = 0.55
+let topAudioActive = false
+
+function startTopAudio() {
+  if (topAudioActive) return
+  topAudioActive = true
+  topAudio.currentTime = 0
+  topAudio.play().catch(() => {})
+}
+
+function stopTopAudio() {
+  topAudioActive = false
+  topAudio.pause()
+}
+
+function onTopKeyDown(event) {
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+    startTopAudio()
+  }
+}
 
 async function toggleFeatureMenu() {
   featureMenuOpen.value = !featureMenuOpen.value
@@ -46,10 +78,26 @@ function closeFeatureMenuOnOutsideClick(event) {
   if (featureToolEl.value && !featureToolEl.value.contains(event.target)) {
     featureMenuOpen.value = false
   }
+  if (searchToolEl.value && !searchToolEl.value.contains(event.target)) {
+    searchMenuOpen.value = false
+  }
 }
 
 function closeFeatureMenuOnEscape(event) {
-  if (event.key === 'Escape') featureMenuOpen.value = false
+  if (event.key === 'Escape') {
+    featureMenuOpen.value = false
+    searchMenuOpen.value = false
+  }
+}
+
+function toggleSearchMenu() {
+  searchMenuOpen.value = !searchMenuOpen.value
+}
+
+function selectSearchMode(mode) {
+  selectedSearchMode.value = mode.id
+  searchMenuOpen.value = false
+  showToast(`已选择 ${mode.name} 搜索`)
 }
 
 function toggleToolbar() {
@@ -221,6 +269,37 @@ async function ctxDownload() {
 const searchResults = ref([])
 const searchLoading = ref(false)
 const searchError = ref('')
+let searchRequestId = 0
+
+async function restoreGalleryFirstPage() {
+  if (!galleryFolder.value) return
+  galleryLoading.value = true
+  galleryError.value = ''
+  try {
+    const images = await displayGallery(galleryFolder.value, 1)
+    galleryPage.value = 1
+    hasMore.value = images.length > 0
+    galleryImages.value = images.map(item => ({
+      name: item.name,
+      path: item.path,
+      url: resolveImageUrl(item.thumbnailPath),
+    }))
+  } catch (error) {
+    galleryError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    galleryLoading.value = false
+  }
+  ensureGridScrollable()
+}
+
+async function cancelSearch() {
+  searchRequestId += 1
+  searchResults.value = []
+  searchError.value = ''
+  searchLoading.value = false
+  clearQueryImage()
+  await restoreGalleryFirstPage()
+}
 
 async function startSearch() {
   if (!queryImage.value?.path) {
@@ -236,13 +315,18 @@ async function startSearch() {
     targetImage: queryImage.value.path,
     imagePath: galleryImages.value[0].path,
     method: selectedFeatureMethod.value,
+    top: searchTop.value,
   }
+  const requestId = ++searchRequestId
   searchLoading.value = true
   searchError.value = ''
   searchResults.value = []
   try {
     await generateFeatures(payload)
-    const results = await slowSearchImages(payload)
+    const results = selectedSearchMode.value === 'swift'
+      ? await swiftSearchImages(payload)
+      : await slowSearchImages(payload)
+    if (requestId !== searchRequestId) return
     searchResults.value = results.map(item => ({
       name: item.name || item.image?.split(/[\\/]/).pop() || '图片',
       extension: item.extension || '',
@@ -252,9 +336,10 @@ async function startSearch() {
     }))
     showToast(`已找到 ${searchResults.value.length} 张相似图片`)
   } catch (error) {
+    if (requestId !== searchRequestId) return
     searchError.value = error instanceof Error ? error.message : String(error)
   } finally {
-    searchLoading.value = false
+    if (requestId === searchRequestId) searchLoading.value = false
   }
 }
 
@@ -277,6 +362,8 @@ onBeforeUnmount(() => {
   clearTimeout(toastTimer)
   document.removeEventListener('click', closeFeatureMenuOnOutsideClick)
   window.removeEventListener('keydown', closeFeatureMenuOnEscape)
+  stopTopAudio()
+  topAudio.src = ''
 })
 
 onMounted(() => {
@@ -437,6 +524,46 @@ function onGridScroll(event) {
           </section>
         </Transition>
       </div>
+      <div ref="searchToolEl" class="toolbar__feature-tool">
+        <button
+          class="toolbar__feature-button"
+          :class="{ 'toolbar__feature-button--active': searchMenuOpen }"
+          type="button"
+          :title="`搜索：${selectedSearchMode}`"
+          :aria-expanded="searchMenuOpen"
+          aria-controls="search-mode-menu"
+          @click="toggleSearchMenu"
+        >
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true">
+            <circle cx="10.8" cy="10.8" r="5.8" stroke="currentColor" stroke-width="1.9" />
+            <path d="m15.2 15.2 4.7 4.7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+          </svg>
+          <span v-show="!toolbarCollapsed" class="toolbar__feature-text">搜索</span>
+        </button>
+        <Transition name="feature-menu">
+          <section
+            v-if="searchMenuOpen"
+            id="search-mode-menu"
+            class="feature-menu"
+            aria-label="搜索方式"
+          >
+            <p class="feature-menu__title">搜索</p>
+            <button
+              v-for="mode in searchModes"
+              :key="mode.id"
+              class="feature-menu__option"
+              :class="{ 'feature-menu__option--selected': selectedSearchMode === mode.id }"
+              type="button"
+              @click="selectSearchMode(mode)"
+            >
+              <span><strong>{{ mode.name }}</strong><small>{{ mode.description }}</small></span>
+              <svg v-if="selectedSearchMode === mode.id" viewBox="0 0 24 24" width="17" height="17" fill="none" aria-label="已选择">
+                <path d="m5 12 4.2 4.2L19 6.8" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </section>
+        </Transition>
+      </div>
     </aside>
 
     <!-- 主体两栏 -->
@@ -448,6 +575,25 @@ function onGridScroll(event) {
             <p class="panel-heading__eyebrow">QUERY IMAGE</p>
             <h2>从一张图片开始</h2>
           </div>
+          <label class="top-control" title="设置返回结果数量">
+            <span class="top-control__label">TOP</span>
+            <input
+              v-model.number="searchTop"
+              class="top-control__range"
+              type="range"
+              min="0"
+              max="200"
+              step="1"
+              :style="{ '--range-progress': `${(searchTop / 200) * 100}%` }"
+              @pointerdown="startTopAudio"
+              @pointerup="stopTopAudio"
+              @pointercancel="stopTopAudio"
+              @keydown="onTopKeyDown"
+              @keyup="stopTopAudio"
+              @blur="stopTopAudio"
+            />
+            <output class="top-control__value">{{ searchTop }}</output>
+          </label>
           <span class="panel-heading__mark">✦</span>
         </div>
         <div class="card query-card">
@@ -510,7 +656,10 @@ function onGridScroll(event) {
               <p class="result-card__eyebrow">{{ searchResults.length ? 'SEARCH RESULTS' : 'COLLECTION' }}</p>
               <h2>{{ searchResults.length ? '相似图片' : '图库预览' }}</h2>
             </div>
-            <span class="result-card__count">共 {{ searchResults.length || galleryImages.length }} 张</span>
+            <div class="result-card__actions">
+              <button v-if="searchResults.length || searchLoading || searchError" class="result-card__cancel" type="button" @click="cancelSearch">取 消</button>
+              <span class="result-card__count">共 {{ searchResults.length || galleryImages.length }} 张</span>
+            </div>
           </div>
 
           <!-- 加载中 -->
@@ -542,7 +691,7 @@ function onGridScroll(event) {
                 loading="lazy"
                 @contextmenu="openGalleryMenu($event, item)"
               />
-              <figcaption>{{ item.name }}</figcaption>
+              <figcaption class="gallery-item__caption" :title="item.name"><span>{{ item.name }}</span></figcaption>
             </figure>
             <!-- 底部加载状态条 -->
             <div class="grid-footer">
@@ -646,9 +795,107 @@ function onGridScroll(event) {
 }
 
 .panel-col { display: flex; flex-direction: column; gap: 0.75rem; min-height: 0; min-width: 0; }
-.panel-heading { display: flex; align-items: center; justify-content: space-between; min-height: 2.8rem; padding: 0 0.35rem; }
+.panel-heading { display: flex; align-items: center; justify-content: space-between; min-height: 3.6rem; padding: 0 0.35rem; }
 .panel-heading h2, .result-card__heading h2 { margin-top: 0.12rem; color: var(--color-text); font-size: 1.08rem; font-weight: 400; }
 .panel-heading__mark { display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid var(--color-border); border-radius: 50%; color: var(--color-accent); transform: rotate(12deg); }
+
+.top-control {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-left: auto;
+  margin-right: 0.9rem;
+  min-height: 3.5rem;
+  padding: 0.62rem 0.85rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
+  background: rgba(255, 253, 248, 0.58);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.top-control__label {
+  color: var(--color-accent-deep);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.top-control__range {
+  width: clamp(10rem, 17vw, 16rem);
+  height: 1rem;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.top-control__range::-webkit-slider-runnable-track {
+  height: 0.75rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--color-accent-light) 0%,
+    var(--color-accent) var(--range-progress),
+    rgba(216, 201, 181, 0.75) var(--range-progress),
+    rgba(216, 201, 181, 0.75) 100%
+  );
+}
+
+.top-control__range::-webkit-slider-thumb {
+  width: 1.8rem;
+  height: 1.8rem;
+  margin-top: -0.5rem;
+  border: 3px solid var(--color-card);
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 2px 7px rgba(74, 63, 53, 0.2);
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  transform: translateY(0);
+}
+
+.top-control__range::-moz-range-track {
+  height: 0.75rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--color-accent-light) 0%,
+    var(--color-accent) var(--range-progress),
+    rgba(216, 201, 181, 0.75) var(--range-progress),
+    rgba(216, 201, 181, 0.75) 100%
+  );
+}
+
+.top-control__range::-moz-range-thumb {
+  width: 1.8rem;
+  height: 1.8rem;
+  border: 3px solid var(--color-card);
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 2px 7px rgba(74, 63, 53, 0.2);
+  cursor: pointer;
+}
+
+.top-control__range:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 4px;
+}
+
+.top-control__value {
+  min-width: 3.4rem;
+  padding: 0.42rem 0.6rem;
+  border: 2px solid var(--color-border);
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.72);
+  color: var(--color-accent-deep);
+  font-size: 1rem;
+  font-weight: 700;
+  text-align: center;
+}
 
 /* ---------- 工具栏 ---------- */
 .toolbar {
@@ -1075,6 +1322,34 @@ function onGridScroll(event) {
   padding: 0 0.2rem;
 }
 
+.result-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.result-card__cancel {
+  padding: 0.32rem 0.72rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sketchy);
+  background: rgba(255, 253, 248, 0.72);
+  color: var(--color-text-secondary);
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+}
+
+.result-card__cancel:hover {
+  border-color: var(--color-danger);
+  background: rgba(226, 109, 109, 0.1);
+  color: var(--color-danger);
+}
+
+.result-card__cancel:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .result-card__count {
   position: static;
   padding: 0.28rem 0.65rem;
@@ -1106,6 +1381,13 @@ function onGridScroll(event) {
   font-size: 0.72rem;
   font-weight: 600;
   backdrop-filter: blur(6px);
+}
+
+/* 标题栏内的数量与取消按钮保持同一行 */
+.result-card__actions .result-card__count {
+  position: static;
+  top: auto;
+  right: auto;
 }
 
 .result-grid {
@@ -1173,6 +1455,23 @@ function onGridScroll(event) {
 .result-item figcaption small {
   color: var(--color-accent-deep);
   font-size: 0.65rem;
+}
+
+.result-item figcaption.gallery-item__caption {
+  box-sizing: border-box;
+  height: calc(2 * 1.28em + 0.9rem);
+  min-height: calc(2 * 1.28em + 0.9rem);
+  overflow: hidden;
+}
+
+.result-item figcaption.gallery-item__caption > span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.28;
+  white-space: normal;
+  text-overflow: ellipsis;
 }
 
 /* 网格底部加载状态条 */
@@ -1399,6 +1698,36 @@ function onGridScroll(event) {
   .toolbar__label {
     margin-top: 0;
     writing-mode: horizontal-tb;
+  }
+
+  .panel-heading {
+    flex-wrap: wrap;
+    row-gap: 0.45rem;
+  }
+
+  .top-control {
+    order: 3;
+    flex-basis: 100%;
+    margin: 0;
+    min-height: 3.75rem;
+    padding-inline: 1rem;
+  }
+
+  .top-control__range {
+    flex: 1;
+    width: auto;
+    height: 1.1rem;
+  }
+
+  .top-control__range::-webkit-slider-thumb {
+    width: 2rem;
+    height: 2rem;
+    margin-top: -0.625rem;
+  }
+
+  .top-control__range::-moz-range-thumb {
+    width: 2rem;
+    height: 2rem;
   }
 
   .content {

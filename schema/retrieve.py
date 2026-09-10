@@ -41,6 +41,7 @@ class ImageCollection(BaseModel):
     # image_album:List[str]=Field(validation_alias="imageAlbum",serialization_alias="imageAlbum")
     image_path:str=Field(validation_alias="imagePath",serialization_alias="imagePath")
     method:str=Field(validation_alias="method",serialization_alias="method")
+    top:int=Field(validation_alias="top",serialization_alias="top")
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True

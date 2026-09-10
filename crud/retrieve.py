@@ -20,6 +20,8 @@ from torch.nn import functional as F
 import random
 from pathlib import Path
 import numpy as np
+import faiss
+from collections import defaultdict
 
 async def fetch_image_from_folder(folder:str,config_path:Optional[str])->List[retrieve_schema.ImageInfo]:
     """
@@ -308,7 +310,7 @@ async def image_path_to_folder_id(image_path:str,db:AsyncSession)->int:
     return folder_id
 
 # 根据目录id获取目录路径
-async def folder_id_to_path(folder_id:int,db:AsyncSession):
+async def folder_id_to_path(folder_id:int,db:AsyncSession)->str:
     stmt=select(
         retrieve_model.Folders.folder_path
     ).where(
@@ -377,6 +379,7 @@ async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSess
     save_dir=base_dir.joinpath(vector_dir,model_dir,f"{folder_id}")
     images_to_process=await _select_update_or_insert(save_dir=save_dir,images=image_collection,folder=folder_path)
     if not images_to_process:
+        logger.info(f"No need to update and no need to insert")
         return
     image_collection_dateset = data_collection.VggDataset(image_collection=images_to_process, need_transform=True)
     # 获取target的张量
@@ -426,10 +429,33 @@ async def vgg16_image_feature_vector(image_path:str,config_file:str,db:AsyncSess
     # 保存feature数据
     await insert_dat_(dataset=images_feature,db=db)
 
-async def batch_insert_feature(imag_features:torch.Tensor,image_paths:List,folder_path:str,db:AsyncSession):
-    if imag_features.dim()<2:
+async def batch_insert_feature(image_features:torch.Tensor,image_paths:List,folder_path:str,save_dir:Path):
+    feature_collection=list()
+    if image_features.dim()<2:
         logger.error(f"Incorrect feature data dimension!")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"Incorrect feature data dimension!")
+    # 判断特征向量长度和路径长度是否一致
+    if image_features.size(0)!=len(image_paths):
+        logger.error(f"The number of features doesn't equal the number of paths")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail=f"The number of features doesn't equal the number of paths")
+    for image_feature, image_path in zip(image_features, image_paths):
+        # 分离计算图+cpu+numpy
+        image_feature=image_feature.detach().cpu().numpy()
+        relative_path = os.path.relpath(image_path, folder_path)
+        relative_path = relative_path+".npy"
+        save_path=save_dir.joinpath(relative_path)
+        # 保证父目录存在
+        save_path.parent.mkdir(parents=True,exist_ok=True)
+        # 保存特征向量
+        np.save(file=save_path,arr=image_feature)
+        feature_collection.append(
+            retrieve_model.ImageFeatures(
+                model="openclip",
+                path=image_path,
+                feature=str(save_path)
+            )
+        )
+    return feature_collection
 
 async def _select_update_or_insert(save_dir:Path,images:List[str],folder:str)->List[str]:
     """目录不存在，表示数据从未插入过，直接全部插入
@@ -479,6 +505,16 @@ async def openclip_image_feature_vector(image_path:str,config_file:str,db:AsyncS
     # 特征向量目录
     vector_dir_name=config["vector_dir"]
     vector_dir=Path(__file__).parent.parent.joinpath(vector_dir_name,"openclip",str(folder_id))
+    # 获取需要获取特征向量的图片
+    images=await _select_update_or_insert(
+        save_dir=vector_dir,
+        images=images,
+        folder=folder_path,
+    )
+    # 返回images为空表示不需要任何的更新
+    if not images:
+        logger.info(f"No need to update and no need to insert")
+        return
     # 获取dataset
     images_dataset = openclip_feature_extraction.ClipDataset(images=images,transform=preprocess)
     images_dataloader = data.DataLoader(dataset=images_dataset,batch_size=16,num_workers=2)
@@ -487,7 +523,13 @@ async def openclip_image_feature_vector(image_path:str,config_file:str,db:AsyncS
             images=images.to(device=device)
             image_features=model.encode_image(images)
             image_features=F.normalize(input=image_features,dim=-1,p=2)
-            # TODO 将数据插入到imagefeatures表中
+            feature_collection=await batch_insert_feature(
+                image_features=image_features,
+                image_paths=image_paths,
+                folder_path=folder_path,
+                save_dir=vector_dir,
+            )
+            await insert_dat_(dataset=feature_collection,db=db)
 
 async def feature_by_image_path_form_vgg16(image_path:str,config_file:str)->np.ndarray:
     """
@@ -512,6 +554,33 @@ async def feature_by_image_path_form_vgg16(image_path:str,config_file:str)->np.n
     target_feature=target_feature.squeeze(0).cpu().numpy()
     return target_feature
 
+# 获取特征向量来根据openclip
+async def feature_by_image_path_from_openclip(image_path:str,config)->np.ndarray:
+    """
+    Args:
+        image_path: 图片路径
+        config: 配置文件
+    Returns:
+        特征向量，numpy数组形式
+    """
+    # config=inquiry.load_config(config_file=config_file)
+    clip_model=openclip_feature_extraction.ClipModel(config=config)
+    # 获取设备
+    device=clip_model.device
+    model,preprocess=clip_model.load_clip_model()
+    model.eval()
+    # 将模型移动到设备上
+    model=model.to(device=device)
+    image=Image.open(image_path).convert("RGB")
+    image=preprocess(image).unsqueeze(0)
+    # 将数据移动到设备上
+    image=image.to(device=device)
+    with torch.no_grad(), torch.autocast(device_type=device.type):
+        image_feature=model.encode_image(image)
+        image_feature=F.normalize(input=image_feature,dim=-1,p=2)
+    image_feature=image_feature.squeeze(dim=0).cpu().numpy()
+    return image_feature
+
 # 效率低的搜索方法
 async def slow_search_images(target_image:str,image_path:str,config_file:str,db:AsyncSession,method:str):
     config=inquiry.load_config(config_file=config_file)
@@ -521,6 +590,11 @@ async def slow_search_images(target_image:str,image_path:str,config_file:str,db:
     save_dir=base_dir.joinpath(vector_dir,method,f"{folder_id}")
     if method=="vgg16":
         target_feature=await feature_by_image_path_form_vgg16(image_path=target_image,config_file=config_file)
+    elif method=="openclip":
+        target_feature=await feature_by_image_path_from_openclip(image_path=target_image, config=config)
+    else:
+        logger.error(f"The functionality for this model has not yet been implemented.")
+        raise Exception(f"The functionality for this model has not yet been implemented.") from None
     file_and_feature=list()
     for item in save_dir.rglob("*.npy"):
         file_and_feature.append(
@@ -576,3 +650,87 @@ async def slow_search_images(target_image:str,image_path:str,config_file:str,db:
     return result
 
 # FAISS快速查找
+async def swift_search_images(target_image:str,image_path:str,config_file:str,db:AsyncSession,method:str,top:int):
+    config=inquiry.load_config(config_file=config_file)
+    vector_dir=config["vector_dir"]
+    folder_id = await image_path_to_folder_id(image_path=image_path,db=db)
+    # folder = await folder_id_to_path(folder_id=folder_id,db=db)
+    root_dir=Path(__file__).parent.parent
+    save_dir=root_dir.joinpath(vector_dir,method,f"{folder_id}")
+    if method=="vgg16":
+        target_feature=await feature_by_image_path_form_vgg16(image_path=target_image,config_file=config_file)
+    elif method=="openclip":
+        target_feature=await feature_by_image_path_from_openclip(image_path=target_image,config=config)
+    else:
+        logger.error(f"The functionality for this model has not yet been implemented.")
+        raise Exception(f"The functionality for this model has not yet been implemented.") from None
+    # (512,)->(1,512)
+    target_feature=np.expand_dims(target_feature,axis=0)
+    paths_features=list()
+    for item in save_dir.rglob("*.npy"):
+        paths_features.append(
+            (
+                item,
+                np.load(file=item)
+            )
+        )
+    paths,features=map(list, zip(*paths_features)) if paths_features else ([],[])
+    features=np.stack(features,axis=0)
+    dimension=features.shape[-1]
+    vector_database=faiss.IndexFlatIP(dimension)
+    vector_database.add(features)
+    logger.info(f"The number of eigenvectors is {vector_database.ntotal}!")
+    similarity, indices = vector_database.search(target_feature, k=top)
+    paths=[paths[index] for index in indices[0]]
+    # 获取对应方相似度
+    similarity=similarity[0]
+    # 路径和相似度配对成字典（特征向量路径：相似度）
+    paths_similarity=list(zip(paths,similarity))
+    # 根据相似度排序(faiss已排序)
+    # paths_similarity=sorted(paths_similarity,key=lambda item: item[1], reverse=True)
+    stmt=select(
+        retrieve_model.ImageFeatures.feature,
+        retrieve_model.Images.path,
+        retrieve_model.Images.thumbnail_path,
+        retrieve_model.Images.name,
+        retrieve_model.Images.extension,
+    ).join(
+        retrieve_model.ImageFeatures,
+        retrieve_model.Images.path == retrieve_model.ImageFeatures.path,
+    ).where(
+        retrieve_model.ImageFeatures.feature.in_(
+            list(
+                map(lambda item: str(item[0]),paths_similarity)
+            )
+        )
+    )
+    result=await db.execute(statement=stmt)
+    images_information=result.all()
+    path_map=defaultdict()
+    for feature, path, thumbnail, name, extension in images_information:
+        path_map[feature]=(
+            path,thumbnail,name,extension
+        )
+    result=list()
+    for path, similarity in paths_similarity:
+        image_path,thumbnail,name,extension = path_map.get(str(path),(None,None,None,None))
+        result.append(
+            {
+                "feature": str(path),
+                "thumbnail": thumbnail,
+                "image": image_path,
+                "name": name,
+                "extension": extension,
+                "similarity": float(similarity),
+            }
+        )
+    return result
+
+# 获取模型
+async def fetch_models(db:AsyncSession):
+    stmt=select(
+        retrieve_model.Models.model
+    )
+    result=await db.execute(statement=stmt)
+    models=result.scalars().all()
+    return models

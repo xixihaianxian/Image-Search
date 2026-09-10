@@ -135,6 +135,11 @@ export async function slowSearchImages(payload) {
   return Array.isArray(data) ? data : []
 }
 
+export async function swiftSearchImages(payload) {
+  const data = await requestSearchEndpoint('/retrieve/swift/search/images', payload, '搜索图片')
+  return Array.isArray(data) ? data : []
+}
+
 /**
  * 登记选中的目标图片，后端返回其展示信息
  * @param {string} imagePath 选中图片的绝对路径
