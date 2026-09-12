@@ -1,6 +1,7 @@
 from pydantic import BaseModel,Field,ConfigDict
 from typing import Optional
 from typing import List
+from io import BytesIO
 
 class LocalImage(BaseModel):
     image_path:str=Field(validation_alias="imagePath",serialization_alias="imagePath")
@@ -45,4 +46,13 @@ class ImageCollection(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
         populate_by_name=True
+    )
+
+class AnchorBox(BaseModel):
+    # anchor:BytesIO=Field(validation_alias="anchor",serialization_alias="anchor")
+    method:str=Field(validation_alias="method",serialization_alias="method")
+    top:int=Field(validation_alias="top",serialization_alias="top")
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
     )

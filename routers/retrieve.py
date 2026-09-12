@@ -152,3 +152,33 @@ async def swift_search_images(image_collection:schema_retrieve.ImageCollection,d
         message="success",
         data=result,
     )
+
+@router.post("/anchor/box/image")
+async def anchor_box_image(anchor:UploadFile=File(...),method:str=Form(...),top:int=Form(...),image_path:str=Form(...),search_model:str=Form(...),db:AsyncSession=Depends(database_contrl.get_db)):
+    search_model=search_model.lower()
+    anchor_image=anchor.file
+    # 获取文件名称
+    anchor_name=anchor.filename
+    # 临时文件路径
+    anchor_path=Path(__file__).parent.parent.joinpath("static",anchor_name)
+    # 写入临时文件
+    anchor_path.write_bytes(anchor_image.read())
+    method=method.lower()
+    image_collection=schema_retrieve.ImageCollection(
+        target_image=str(anchor_path),
+        image_path=image_path,
+        top=top,
+        method=method,
+    )
+    await generate_features(image_collection=image_collection,db=db)
+    if search_model == "swift":
+        result=await swift_search_images(image_collection=image_collection,db=db)
+    elif search_model == "slow":
+        result=await slow_search_images(image_collection=image_collection,db=db)
+    # 检查出错误的搜索方式
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported search model: {search_model}")
+    return schema_response.success_response(
+        message="success",
+        data=result,
+    )

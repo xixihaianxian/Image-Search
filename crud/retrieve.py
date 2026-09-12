@@ -680,6 +680,9 @@ async def swift_search_images(target_image:str,image_path:str,config_file:str,db
     vector_database=faiss.IndexFlatIP(dimension)
     vector_database.add(features)
     logger.info(f"The number of eigenvectors is {vector_database.ntotal}!")
+    if top>vector_database.ntotal:
+        logger.warning(f"Selected {top} top images, and the total number of images is {vector_database.ntotal}.")
+        top=vector_database.ntotal
     similarity, indices = vector_database.search(target_feature, k=top)
     paths=[paths[index] for index in indices[0]]
     # 获取对应方相似度

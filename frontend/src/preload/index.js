@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('api', {
   getPathForFile: file => webUtils.getPathForFile(file),
   // 在资源管理器中打开文件所在位置并选中（shell 在主进程通过 IPC 调用）
   showItemInFolder: path => ipcRenderer.invoke('show-item-in-folder', path),
+  readLocalImage: path => ipcRenderer.invoke('read-local-image', path),
 })

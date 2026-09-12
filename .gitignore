@@ -8,3 +8,5 @@ database/image_search.sql
 
 # 特征向量目录
 vector/*
+
+/static/anchor.png

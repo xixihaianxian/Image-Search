@@ -1,6 +1,6 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, nextTick } from 'vue'
-import { uploadLocalGallery, displayGallery, displayModels, generateFeatures, resolveImageUrl, selectTarget, slowSearchImages, swiftSearchImages } from '../api'
+import { uploadAnchorBox, uploadLocalGallery, displayGallery, displayModels, generateFeatures, resolveImageUrl, selectTarget, slowSearchImages, swiftSearchImages } from '../api'
 
 // ---------- 工具栏收起/展开 ----------
 const toolbarCollapsed = ref(false)
@@ -22,6 +22,129 @@ const selectedSearchMode = ref('slow')
 const searchMenuOpen = ref(false)
 const searchToolEl = ref(null)
 const searchTop = ref(20)
+const boxSelectEnabled = ref(false)
+const boxSelecting = ref(false)
+const boxUploading = ref(false)
+const boxImageEl = ref(null)
+const boxSelection = ref(null)
+let boxStartPoint = null
+
+function toggleBoxSelect() {
+  boxSelectEnabled.value = !boxSelectEnabled.value
+  if (!boxSelectEnabled.value) {
+    boxSelecting.value = false
+    boxSelection.value = null
+  }
+}
+
+function getBoxPoint(event) {
+  const rect = boxImageEl.value?.getBoundingClientRect()
+  if (!rect) return null
+  return {
+    x: Math.max(0, Math.min(event.clientX - rect.left, rect.width)),
+    y: Math.max(0, Math.min(event.clientY - rect.top, rect.height)),
+  }
+}
+
+function onBoxPointerDown(event) {
+  if (!boxSelectEnabled.value || !queryImage.value || boxUploading.value) return
+  event.preventDefault()
+  boxImageEl.value?.setPointerCapture?.(event.pointerId)
+  boxStartPoint = getBoxPoint(event)
+  boxSelecting.value = true
+  boxSelection.value = { left: boxStartPoint.x, top: boxStartPoint.y, width: 0, height: 0 }
+}
+
+function onBoxPointerMove(event) {
+  if (!boxSelecting.value || !boxStartPoint) return
+  const point = getBoxPoint(event)
+  const left = Math.min(boxStartPoint.x, point.x)
+  const top = Math.min(boxStartPoint.y, point.y)
+  boxSelection.value = {
+    left,
+    top,
+    width: Math.abs(point.x - boxStartPoint.x),
+    height: Math.abs(point.y - boxStartPoint.y),
+  }
+}
+
+async function onBoxPointerUp(event) {
+  if (!boxSelecting.value) return
+  const point = getBoxPoint(event)
+  onBoxPointerMove(event)
+  boxSelecting.value = false
+  boxStartPoint = null
+  if (!point || !boxSelection.value || boxSelection.value.width < 8 || boxSelection.value.height < 8) {
+    boxSelection.value = null
+    showToast('框选区域太小，请重新选择')
+    return
+  }
+  await uploadSelectedBox()
+}
+
+async function uploadSelectedBox() {
+  const img = boxImageEl.value
+  const selection = boxSelection.value
+  if (!img || !selection || !queryImage.value) return
+  boxUploading.value = true
+  try {
+    let sourceBlob
+    if (queryImage.value.path && window.api?.readLocalImage) {
+      const localImage = await window.api.readLocalImage(queryImage.value.path)
+      sourceBlob = new Blob([new Uint8Array(localImage.data)], { type: localImage.type })
+    } else {
+      const response = await fetch(queryImage.value.url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      sourceBlob = await response.blob()
+    }
+    const sourceUrl = URL.createObjectURL(sourceBlob)
+    const sourceImage = new Image()
+    sourceImage.src = sourceUrl
+    await new Promise((resolve, reject) => {
+      sourceImage.onload = resolve
+      sourceImage.onerror = reject
+    })
+    const scaleX = sourceImage.naturalWidth / img.clientWidth
+    const scaleY = sourceImage.naturalHeight / img.clientHeight
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(selection.width * scaleX))
+    canvas.height = Math.max(1, Math.round(selection.height * scaleY))
+    canvas.getContext('2d').drawImage(
+      sourceImage,
+      Math.round(selection.left * scaleX), Math.round(selection.top * scaleY), canvas.width, canvas.height,
+      0, 0, canvas.width, canvas.height,
+    )
+    URL.revokeObjectURL(sourceUrl)
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) throw new Error('无法生成裁剪图片')
+    const formData = new FormData()
+    const galleryImagePath = galleryImages.value[0]?.path
+    if (!galleryImagePath) throw new Error('请先选择图片库目录')
+    formData.append('anchor', blob, 'anchor.png')
+    formData.append('method', selectedFeatureMethod.value)
+    formData.append('top', String(searchTop.value))
+    formData.append('image_path', galleryImagePath)
+    formData.append('search_model', selectedSearchMode.value)
+    const results = await uploadAnchorBox(formData)
+    searchError.value = ''
+    searchResults.value = results.map(item => ({
+      name: item.name || item.image?.split(/[\\/]/).pop() || '图片',
+      extension: item.extension || '',
+      path: item.image,
+      url: resolveImageUrl(item.thumbnail),
+      similarity: item.similarity,
+    }))
+    if (!searchResults.value.length) {
+      showToast('框选请求成功，但后端没有返回搜索结果')
+    } else {
+      showToast(`已找到 ${searchResults.value.length} 张相似图片`)
+    }
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error))
+  } finally {
+    boxUploading.value = false
+  }
+}
 const topAudio = new Audio('/audio/pyk-toon-n-n.mp3')
 topAudio.loop = false
 topAudio.volume = 0.55
@@ -165,6 +288,8 @@ function clearQueryImage() {
   if (queryObjectUrl) URL.revokeObjectURL(queryObjectUrl)
   queryObjectUrl = null
   queryImage.value = null
+  boxSelection.value = null
+  boxSelecting.value = false
 }
 
 // ---------- 图片右键菜单（查询图 / 图库图通用） ----------
@@ -564,6 +689,21 @@ function onGridScroll(event) {
           </section>
         </Transition>
       </div>
+      <div class="toolbar__feature-tool">
+        <button
+          class="toolbar__feature-button"
+          :class="{ 'toolbar__feature-button--active': boxSelectEnabled }"
+          type="button"
+          title="框选"
+          :aria-pressed="boxSelectEnabled"
+          @click="toggleBoxSelect"
+        >
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true">
+            <path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span v-show="!toolbarCollapsed" class="toolbar__feature-text">框选</span>
+        </button>
+      </div>
     </aside>
 
     <!-- 主体两栏 -->
@@ -598,12 +738,24 @@ function onGridScroll(event) {
         </div>
         <div class="card query-card">
           <template v-if="queryImage">
-            <img
-              class="query-card__img"
-              :src="queryImage.url"
-              :alt="queryImage.name"
+            <div
+              ref="boxImageEl"
+              class="query-image-stage"
+              :class="{ 'query-image-stage--box': boxSelectEnabled, 'query-image-stage--selecting': boxSelecting }"
+              @pointerdown="onBoxPointerDown"
+              @pointermove="onBoxPointerMove"
+              @pointerup="onBoxPointerUp"
+              @pointercancel="onBoxPointerUp"
               @contextmenu="openCtxMenu"
-            />
+            >
+              <img class="query-card__img" :src="queryImage.url" :alt="queryImage.name" />
+              <div
+                v-if="boxSelection"
+                class="box-selection"
+                :style="{ left: `${boxSelection.left}px`, top: `${boxSelection.top}px`, width: `${boxSelection.width}px`, height: `${boxSelection.height}px` }"
+              ></div>
+              <span v-if="boxUploading" class="box-selection__status">正在提交…</span>
+            </div>
             <button
               class="query-card__remove"
               type="button"
@@ -1207,12 +1359,57 @@ function onGridScroll(event) {
 }
 
 .query-card__img {
+  display: block;
+  width: auto;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
   min-height: 0;
   border-radius: var(--radius-sketchy);
   object-fit: contain;
   box-shadow: 0 6px 20px rgba(100, 116, 139, 0.16);
+}
+
+.query-image-stage {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.query-image-stage--box { cursor: crosshair; }
+.query-image-stage--selecting { user-select: none; }
+.query-image-stage--box .query-card__img { pointer-events: none; }
+
+.box-selection {
+  position: absolute;
+  z-index: 2;
+  border: 2px solid rgba(214, 123, 145, 0.95);
+  background: rgba(244, 174, 192, 0.34);
+  box-shadow: 0 0 0 9999px rgba(244, 174, 192, 0.08);
+  pointer-events: none;
+}
+
+.box-selection__status {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  z-index: 3;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(74, 63, 53, 0.78);
+  color: #fff;
+  font-size: 0.75rem;
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 /* 悬停显示的移除按钮（红叉） */
@@ -1350,6 +1547,12 @@ function onGridScroll(event) {
   outline-offset: 2px;
 }
 
+/* 结果卡片内的空状态/加载态：撑满卡片并垂直居中 */
+.result-card > .card-empty {
+  flex: 1;
+  justify-content: center;
+}
+
 .result-card__count {
   position: static;
   padding: 0.28rem 0.65rem;
@@ -1360,34 +1563,6 @@ function onGridScroll(event) {
   font-size: 0.7rem;
   font-weight: 600;
   backdrop-filter: blur(6px);
-}
-
-/* 结果卡片内的空状态/加载态：撑满卡片并垂直居中 */
-.result-card > .card-empty {
-  flex: 1;
-  justify-content: center;
-}
-
-.result-card__count {
-  position: absolute;
-  top: 0.85rem;
-  right: 0.9rem;
-  z-index: 1;
-  padding: 0.25rem 0.75rem;
-  border: 2px solid var(--color-border);
-  border-radius: var(--radius-sketchy);
-  background: var(--color-card);
-  color: var(--color-accent);
-  font-size: 0.72rem;
-  font-weight: 600;
-  backdrop-filter: blur(6px);
-}
-
-/* 标题栏内的数量与取消按钮保持同一行 */
-.result-card__actions .result-card__count {
-  position: static;
-  top: auto;
-  right: auto;
 }
 
 .result-grid {

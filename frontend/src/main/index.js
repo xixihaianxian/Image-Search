@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
-import { join } from 'path'
+import { join, extname } from 'path'
+import { promises as fs } from 'fs'
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -33,6 +34,14 @@ app.whenReady().then(() => {
   // 在资源管理器中打开文件所在位置并选中（shell 只能在主进程使用）
   ipcMain.handle('show-item-in-folder', (_event, path) => {
     shell.showItemInFolder(path)
+  })
+
+  // 通过主进程读取本地查询图，避免渲染进程 fetch 本地文件接口时受到 CORS 限制
+  ipcMain.handle('read-local-image', async (_event, path) => {
+    const data = await fs.readFile(path)
+    const extension = extname(path).toLowerCase()
+    const mimeTypes = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.bmp': 'image/bmp', '.gif': 'image/gif' }
+    return { data, type: mimeTypes[extension] || 'application/octet-stream' }
   })
 
   createWindow()

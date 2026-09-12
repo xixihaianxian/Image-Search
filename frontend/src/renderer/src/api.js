@@ -140,6 +140,40 @@ export async function swiftSearchImages(payload) {
   return Array.isArray(data) ? data : []
 }
 
+export async function uploadAnchorBox(formData) {
+  let response
+  try {
+    response = await fetch(`${API_BASE}/retrieve/anchor/box/image`, {
+      method: 'POST',
+      body: formData,
+    })
+  } catch {
+    throw new Error('无法连接后端，框选图片上传未完成')
+  }
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+    } catch {
+      /* 使用默认错误信息 */
+    }
+    throw new Error(`框选图片上传失败：${detail}`)
+  }
+  const result = await response.json()
+  let data = result?.data
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data)
+    } catch {
+      return []
+    }
+  }
+  // 兼容后端将结果再次包装为 { data: [...] } 的响应
+  if (!Array.isArray(data) && Array.isArray(data?.data)) data = data.data
+  return Array.isArray(data) ? data : []
+}
+
 /**
  * 登记选中的目标图片，后端返回其展示信息
  * @param {string} imagePath 选中图片的绝对路径
