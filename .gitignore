@@ -3,6 +3,7 @@ upload/*
 
 # 数据库
 database/image_search.sql
+database/image_search.db
 
 .env
 

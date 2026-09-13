@@ -80,27 +80,34 @@ ImageSearch/
 
 ### 1. 安装后端依赖
 
-项目提供了对应的 `requirements.txt`，请按需安装（建议使用虚拟环境）：
+- `clone`项目
+  
+  ```bash
+  # clone master分支
+  git clone -b master https://github.com/xixihaianxian/Image-Search.git
+  ```
 
-```bash
-# 创建虚拟环境
-conda create -n imagesearch python=3.11
+- 项目提供了对应的 `requirements.txt`，请按需安装（建议使用虚拟环境）：
 
-# 激活环境
-conda activate imagesearch
+  ```bash
+  # 创建虚拟环境
+  conda create -n imagesearch python=3.11
 
-# 下载所需的库
-pip install -r requirements.txt
-```
+  # 激活环境
+  conda activate imagesearch
 
-```bash
-# 查看cuda版本
-nvidia-smi
-```
+  # 下载所需的库
+  pip install -r requirements.txt
+  ```
 
-> `faiss-cpu` 可替换为 `faiss-gpu`（需匹配 CUDA 版本）。`torch`/`torchvision` 建议按官方指引安装对应 CUDA 版本。
+  ```bash
+  # 查看cuda版本
+  nvidia-smi
+  ```
 
-[torch下载地址](https://pytorch.org/get-started/locally)，根据自身cuda版本下载对应的版本
+  > `faiss-cpu` 可替换为 `faiss-gpu`（需匹配 CUDA 版本）。`torch`/`torchvision` 建议按官方指引安装对应 CUDA 版本。
+
+  [torch下载地址](https://pytorch.org/get-started/locally)，根据自身cuda版本下载对应的版本
 
 ### 2. 准备模型权重
 
